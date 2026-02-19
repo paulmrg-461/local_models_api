@@ -1,4 +1,5 @@
 from io import BytesIO
+import base64
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -37,3 +38,28 @@ def test_vision_frame_endpoint_returns_description():
     data = response.json()
     assert data["description"] == "fake response"
 
+
+def test_vision_frame_b64_endpoint_returns_description():
+    client = TestClient(app)
+    image = Image.new("RGB", (8, 8))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    payload = {"image_b64": image_b64}
+    response = client.post("/vision/frame_b64", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["description"] == "fake response"
+
+
+def test_vision_frame_b64_endpoint_rejects_invalid_base64():
+    client = TestClient(app)
+    payload = {"image_b64": "not-base64"}
+
+    response = client.post("/vision/frame_b64", json=payload)
+
+    assert response.status_code == 400
