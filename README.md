@@ -494,8 +494,9 @@ This keeps use cases independent from specific model implementations and makes i
 - Document new features in dedicated MD files and reference them from the README.
 
 ---
-Developed by:
-Paul Realpe
-Email: co.devpaul@gmail.com
-Phone: 3043162313
-<a  href="https://devpaul.co">https://devpaul.co/</a>
+
+## Developed by:
+- Paul Realpe
+- Email: co.devpaul@gmail.com
+- Phone: 3043162313
+- <a href="https://devpaul.pro">https://devpaul.pro/</a>
