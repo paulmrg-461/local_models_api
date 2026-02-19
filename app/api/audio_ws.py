@@ -5,10 +5,8 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from app.application.audio.use_cases import AnalyzeAudioSessionUseCase
 from app.domain.audio.interfaces import AudioSessionAnalysis
-from app.infrastructure.audio.dummy_pipeline import (
-    DummyASRGateway,
-    DummyConversationAnalysisGateway,
-)
+from app.infrastructure.audio.dummy_pipeline import DummyConversationAnalysisGateway
+from app.infrastructure.audio.faster_whisper_gateway import FasterWhisperASRGateway
 
 
 router = APIRouter()
@@ -37,7 +35,7 @@ class AudioSession:
 
 
 def get_analyze_audio_use_case() -> AnalyzeAudioSessionUseCase:
-    asr_gateway = DummyASRGateway()
+    asr_gateway = FasterWhisperASRGateway()
     conversation_gateway = DummyConversationAnalysisGateway()
     return AnalyzeAudioSessionUseCase(asr_gateway, conversation_gateway)
 
@@ -88,4 +86,3 @@ async def websocket_audio(
 
     except WebSocketDisconnect:
         return
-

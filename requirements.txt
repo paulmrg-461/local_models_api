@@ -4,5 +4,6 @@ pillow
 torch
 transformers
 qwen-vl-utils
+faster-whisper
 pytest
 httpx

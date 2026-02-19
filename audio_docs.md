@@ -93,26 +93,38 @@ These abstractions isolate the core business logic from any specific ASR or LLM 
 
 This use case encapsulates the orchestration logic and depends only on the domain interfaces.
 
-### Infrastructure Layer – Dummy Pipeline
+### Infrastructure Layer – ASR and Conversation Pipelines
+
+**File:** `app/infrastructure/audio/faster_whisper_gateway.py`
+
+- `FasterWhisperASRGateway(ASRGateway)`
+  - Provides a real ASR implementation based on `faster-whisper`.
+  - Configuration:
+    - Model ID:
+      - `FWHISPER_MODEL_ID` environment variable (default: `large-v3`).
+    - Device:
+      - `FWHISPER_DEVICE` environment variable (default: `cuda`).
+    - Compute type:
+      - `FWHISPER_COMPUTE_TYPE` environment variable (default: `float16`).
+  - Behavior:
+    - Receives raw audio bytes for the whole session.
+    - Writes bytes to a temporary `.wav` file.
+    - Calls `WhisperModel.transcribe` on that file path with the requested language.
+    - Maps returned segments to `TranscriptSegment` instances:
+      - `speaker` is set to `"S1"` as a placeholder.
+      - `start`, `end`, and `text` are taken from the model segments.
 
 **File:** `app/infrastructure/audio/dummy_pipeline.py`
 
-This module provides simple, fully local implementations of the domain gateways to keep the system functional while you integrate real models later.
-
 - `DummyASRGateway(ASRGateway)`
-  - Returns a fixed list with one `TranscriptSegment`:
-    - Speaker `S1`, time range `[0.0, 1.0]`, text `"dummy transcript"`.
-
+  - Simple ASR stub used for tests and as a fallback example.
 - `DummyConversationAnalysisGateway(ConversationAnalysisGateway)`
-  - Builds a fixed `AudioSessionAnalysis` using the provided `session_id`, `language`, and transcript segments:
-    - `summary`: `"dummy summary"`
-    - `action_items`: one dummy item with a single step.
-    - `risks`: one dummy risk string.
+  - Simple conversation-analysis stub that builds `AudioSessionAnalysis` with dummy values.
 
-In production, you would replace these dummy classes with:
+In the current wiring:
 
-- An ASR implementation using `faster-whisper` and possibly VAD.
-- A conversation analysis implementation using a local LLM (Qwen, Mistral, Llama, etc.).
+- The WebSocket endpoint uses `FasterWhisperASRGateway` for ASR.
+- The conversation analysis still uses `DummyConversationAnalysisGateway` until a real LLM gateway is added.
 
 ### API Layer – WebSocket `/ws/audio`
 
@@ -135,10 +147,10 @@ In production, you would replace these dummy classes with:
 #### Dependency – `get_analyze_audio_use_case()`
 
 - Instantiates:
-  - `DummyASRGateway`
-  - `DummyConversationAnalysisGateway`
-  - `AnalyzeAudioSessionUseCase`
-- Registered as a dependency for the WebSocket handler so it can be overridden in tests or replaced in production with real gateways.
+  - `FasterWhisperASRGateway` for ASR.
+  - `DummyConversationAnalysisGateway` for conversation analysis (to be replaced by a real LLM).
+  - `AnalyzeAudioSessionUseCase`.
+- Registered as a dependency for the WebSocket handler so it can be overridden in tests or swapped for different gateway implementations.
 
 #### WebSocket Endpoint – `/ws/audio`
 
@@ -256,18 +268,13 @@ pytest
 
 ---
 
-## Next Steps for Integrating Real Models
+## Next Steps for Conversation Analysis
 
-To move from the dummy pipeline to a real faster-whisper + LLM pipeline:
+To move from the current setup (real ASR + dummy conversation analysis) to a full faster-whisper + LLM pipeline:
 
-1. Implement an `ASRGateway` using `faster-whisper`:
-   - Convert raw PCM bytes to the format expected by faster-whisper.
-   - Use the GPU for inference.
-   - Map segments to `TranscriptSegment`.
-2. Implement a `ConversationAnalysisGateway` using a local LLM:
-   - Build a prompt from the transcript.
+1. Implement a `ConversationAnalysisGateway` using a local LLM:
+   - Build a prompt from the transcript segments.
    - Ask the model for summary, action items, and risks.
    - Map the response to `AudioSessionAnalysis`.
-3. Update `get_analyze_audio_use_case()` to instantiate the real gateways instead of the dummy ones.
-4. Optionally add configuration (environment variables) to choose between dummy and real pipelines at runtime.
-
+2. Update `get_analyze_audio_use_case()` to instantiate the real ConversationAnalysisGateway instead of the dummy one.
+3. Optionally use environment variables to choose between dummy and real gateways at runtime.
