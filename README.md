@@ -492,3 +492,10 @@ This keeps use cases independent from specific model implementations and makes i
 - Add unit tests for use cases and integration tests for endpoints.
 - For GPU inference, prefer batch‑free small requests initially and measure latency.
 - Document new features in dedicated MD files and reference them from the README.
+
+---
+Developed by:
+Paul Realpe
+Email: co.devpaul@gmail.com
+Phone: 3043162313
+<a  href="https://devpaul.co">https://devpaul.co/</a>
