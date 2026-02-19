@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from app.application.audio.use_cases import AnalyzeAudioSessionUseCase
 from app.domain.audio.interfaces import AudioSessionAnalysis
+import os
 from app.infrastructure.audio.dummy_pipeline import DummyConversationAnalysisGateway
 from app.infrastructure.audio.faster_whisper_gateway import FasterWhisperASRGateway
+from app.infrastructure.audio.llm_gateway import TransformersLLMConversationGateway
 
 
 router = APIRouter()
@@ -36,7 +38,13 @@ class AudioSession:
 
 def get_analyze_audio_use_case() -> AnalyzeAudioSessionUseCase:
     asr_gateway = FasterWhisperASRGateway()
-    conversation_gateway = DummyConversationAnalysisGateway()
+
+    use_real_llm = os.getenv("CONV_LLM_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    if use_real_llm:
+        conversation_gateway = TransformersLLMConversationGateway()
+    else:
+        conversation_gateway = DummyConversationAnalysisGateway()
+
     return AnalyzeAudioSessionUseCase(asr_gateway, conversation_gateway)
 
 

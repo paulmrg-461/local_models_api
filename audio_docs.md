@@ -270,11 +270,37 @@ pytest
 
 ## Next Steps for Conversation Analysis
 
-To move from the current setup (real ASR + dummy conversation analysis) to a full faster-whisper + LLM pipeline:
+The current setup uses real ASR with `FasterWhisperASRGateway` and a configurable LLM-based conversation analysis gateway.
 
-1. Implement a `ConversationAnalysisGateway` using a local LLM:
-   - Build a prompt from the transcript segments.
-   - Ask the model for summary, action items, and risks.
-   - Map the response to `AudioSessionAnalysis`.
-2. Update `get_analyze_audio_use_case()` to instantiate the real ConversationAnalysisGateway instead of the dummy one.
-3. Optionally use environment variables to choose between dummy and real gateways at runtime.
+### Conversation Analysis Gateway
+
+**File:** `app/infrastructure/audio/llm_gateway.py`
+
+- `TransformersLLMConversationGateway(ConversationAnalysisGateway)`
+  - Loads a local HF model via `transformers`:
+    - Model ID: `CONV_LLM_MODEL_ID` (default: `Qwen/Qwen2.5-3B-Instruct`).
+    - Device: `CONV_LLM_DEVICE` (default: `cuda`).
+    - Torch dtype: `CONV_LLM_TORCH_DTYPE` (default: `bfloat16`).
+    - Max tokens: `CONV_LLM_MAX_NEW_TOKENS` (default: `512`).
+  - Builds a language-aware prompt from transcript segments, requesting strictly valid JSON with:
+    - `summary`, `action_items` (array of `{title, description, steps}`), `risks` (array of strings).
+  - Parses the model output; if not valid JSON, falls back to using the raw text as `summary`.
+
+### Wiring
+
+- In `app/api/audio_ws.py`, the dependency resolver:
+  - Always uses `FasterWhisperASRGateway` for ASR.
+  - Chooses conversation analysis based on `CONV_LLM_ENABLED`:
+    - `true` → `TransformersLLMConversationGateway`.
+    - Otherwise → `DummyConversationAnalysisGateway`.
+
+### Environment Variables
+
+- `CONV_LLM_ENABLED` = `true` to enable the real LLM gateway.
+- `CONV_LLM_BACKEND` is reserved for future backends (e.g., llama.cpp); current implementation uses `TRANSFORMERS`.
+- `CONV_LLM_MODEL_ID` = HF model id, e.g. `Qwen/Qwen2.5-3B-Instruct`.
+- `CONV_LLM_DEVICE` = `cuda` or `cpu`.
+- `CONV_LLM_TORCH_DTYPE` = `bfloat16` | `float16` | `float32`.
+- `CONV_LLM_MAX_NEW_TOKENS` = integer limit for generated tokens.
+
+Adjust these variables in your environment or load them from `example.env` before starting the server.
