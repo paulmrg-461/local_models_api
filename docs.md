@@ -1,14 +1,3 @@
-Perfecto, este enfoque (backend propio en Python con FastAPI sobre una RTX / Jetson) es muy buena idea para tu caso.
-
-A continuación tienes una **guía completa** en formato markdown (puedes copiarla a un `.md` si quieres) para construir:
-
-- Un backend FastAPI que:
-  - **Reciba audio en tiempo real por WebSocket**.
-  - **Reciba fotos periódicas por HTTP** (POST).
-- Manteniendo **el mismo tipo de datos** que ya envías a GEMINI (audio crudo o codificado, imágenes en bytes/base64), de forma que a nivel de app sólo cambies la URL y, como mucho, el protocolo (HTTP → WebSocket para audio).
-
----
-
 # Guía: Backend FastAPI para audio en tiempo real y fotos periódicas
 
 ## 1. Arquitectura general
