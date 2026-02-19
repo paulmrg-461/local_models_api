@@ -381,3 +381,114 @@ On the mobile client (same network), you then point to:
   - Audio transport mechanism (HTTP → WebSocket).
   - Image format if needed (you can keep base64 if you already use it).
 
+---
+
+## Quick Install
+
+- Create and activate a virtual environment:
+  - Linux/macOS:
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+  - Windows (PowerShell):
+    ```powershell
+    python -m venv venv
+    .\venv\Scripts\Activate.ps1
+    ```
+- Install project dependencies:
+  ```bash
+  pip install -r requirements.txt
+  ```
+- GPU requirements:
+  - Ensure NVIDIA drivers and CUDA are correctly installed.
+  - Install a compatible PyTorch build with CUDA per official instructions.
+  - Validate with:
+    ```python
+    import torch; print(torch.cuda.is_available())
+    ```
+
+---
+
+## What’s Available
+
+- Vision endpoints:
+  - `POST /vision/frame` (multipart/form-data)
+  - `POST /vision/frame_b64` (JSON + base64)
+  - Backed by a local VLM: Qwen2.5‑VL‑3B on GPU.
+- Audio WebSocket:
+  - `ws://HOST:PORT/ws/audio`
+  - Receives config + audio chunks, returns a final session analysis JSON.
+  - Pipeline is structured to plug in faster‑whisper and a local LLM.
+
+See detailed feature docs:
+- Vision: [vision_docs.md](file:///c:/Users/paulm/Documents/dev-projects/IAAplicada/OMIGlasses/local_models_api/vision_docs.md)
+- Audio: [audio_docs.md](file:///c:/Users/paulm/Documents/dev-projects/IAAplicada/OMIGlasses/local_models_api/audio_docs.md)
+
+---
+
+## Architecture
+
+The project follows a clean architecture separation:
+
+- Domain
+  - Core models and interfaces (contracts).
+- Application
+  - Use cases orchestrating domain logic.
+- Infrastructure
+  - Concrete adapters to models and external systems.
+- API
+  - FastAPI routers and transport protocols (HTTP/WebSocket).
+
+This keeps use cases independent from specific model implementations and makes it easy to swap gateways (e.g., dummy → faster‑whisper).
+
+---
+
+## Project Structure
+
+- API
+  - `app/api/vision_routes.py`
+  - `app/api/audio_ws.py`
+- Application (use cases)
+  - `app/application/vision/use_cases.py`
+  - `app/application/audio/use_cases.py`
+- Domain (interfaces and data models)
+  - `app/domain/vision/interfaces.py`
+  - `app/domain/audio/interfaces.py`
+- Infrastructure (concrete implementations)
+  - `app/infrastructure/vision/qwen_service.py`
+  - `app/infrastructure/audio/dummy_pipeline.py`
+- Entry point
+  - `app/main.py`
+- Docs
+  - [vision_docs.md](file:///c:/Users/paulm/Documents/dev-projects/IAAplicada/OMIGlasses/local_models_api/vision_docs.md)
+  - [audio_docs.md](file:///c:/Users/paulm/Documents/dev-projects/IAAplicada/OMIGlasses/local_models_api/audio_docs.md)
+
+---
+
+## Development Workflow
+
+- Create a venv and install dependencies (`requirements.txt`).
+- Run the server with:
+  ```bash
+  uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  ```
+- Run tests:
+  ```bash
+  pytest
+  ```
+- Vision model setup:
+  - Install PyTorch with CUDA, `transformers`, and Qwen VL utilities.
+  - The vision gateway loads `Qwen/Qwen2.5-VL-3B-Instruct` to GPU.
+- Audio pipeline:
+  - Current: dummy ASR + dummy LLM analysis for functional API and tests.
+  - Next: replace with faster‑whisper (ASR) and a local LLM gateway.
+
+---
+
+## Notes for New Contributors
+
+- Keep changes within the appropriate layer (Domain/Application/Infrastructure/API).
+- Add unit tests for use cases and integration tests for endpoints.
+- For GPU inference, prefer batch‑free small requests initially and measure latency.
+- Document new features in dedicated MD files and reference them from the README.
