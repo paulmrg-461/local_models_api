@@ -60,6 +60,30 @@ The client application:
 - Python 3.10+ (or compatible).
 - NVIDIA drivers and CUDA properly installed for GPU acceleration.
 
+### GPU Setup – RTX 5070 (Windows & Linux)
+
+- Install the latest NVIDIA driver from NVIDIA’s website or your distro’s packages.
+- Create and activate the Python virtual environment as shown below.
+- Inside the venv, install a CUDA-enabled PyTorch build compatible with RTX 5070:
+  - Linux:
+    ```bash
+    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    ```
+  - Windows (PowerShell inside venv):
+    ```powershell
+    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    ```
+- Verify that PyTorch sees the GPU:
+  ```bash
+  python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_capability(0))"
+  ```
+  The output must show:
+  - `torch.cuda.is_available()` as `True`.
+  - A CUDA version (e.g. `12.8`).
+  - A device capability like `(12, 0)` for RTX 5070.
+
+> If you see a warning saying your GPU is not compatible with the current PyTorch build, reinstall PyTorch using the nightly cu128 wheel as shown above.
+
 ### Python Environment
 
 ```bash
