@@ -1,5 +1,7 @@
 from dataclasses import asdict, dataclass
 from typing import Optional
+import io
+import wave
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
@@ -75,10 +77,20 @@ async def websocket_audio(
                     )
 
                 if msg_type == "end_of_stream" and session is not None:
+                    payload = bytes(session.audio_buffer)
+                    if session.encoding.lower() == "pcm16":
+                        buf = io.BytesIO()
+                        with wave.open(buf, "wb") as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(session.sample_rate)
+                            wf.writeframes(payload)
+                        payload = buf.getvalue()
+
                     analysis: AudioSessionAnalysis = use_case.execute(
                         session_id=session.session_id,
                         language=session.language,
-                        audio_bytes=bytes(session.audio_buffer),
+                        audio_bytes=payload,
                     )
                     await websocket.send_json(
                         {

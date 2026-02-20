@@ -57,6 +57,9 @@ class TransformersLLMConversationGateway(ConversationAnalysisGateway):
         else:
             dtype = torch.float32
 
+        if resolved_device == "cuda" and dtype is torch.bfloat16:
+            dtype = torch.float16
+
         self._tokenizer = AutoTokenizer.from_pretrained(resolved_model_id, use_fast=True)
         self._model = AutoModelForCausalLM.from_pretrained(
             resolved_model_id,
@@ -142,4 +145,3 @@ class TransformersLLMConversationGateway(ConversationAnalysisGateway):
             )
 
         return f"{instruction}\n\nTranscript:\n{transcript_text}\n\nJSON:"
-
