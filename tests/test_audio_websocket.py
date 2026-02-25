@@ -209,3 +209,58 @@ def test_session_buffer_limit_closes():
         with pytest.raises(WebSocketDisconnect):
             websocket.receive_json()
 
+
+def test_analysis_serialization():
+    """Only one session should be analysed at a time. If two clients send
+    audio simultaneously we rely on the module semaphore to queue them.  The
+    fake use case records how many executions run concurrently; the value must
+    never exceed one.
+    """
+    # create a use case whose execute method sleeps and tracks concurrent runs
+    import time
+
+    running = {"count": 0, "max": 0}
+
+    class TimingASR(FakeASR):
+        pass
+
+    class TimingAnalyzer(FakeConversationAnalyzer):
+        pass
+
+    class TimingUseCase(AnalyzeAudioSessionUseCase):
+        def execute(self, session_id: str, language: str, audio_bytes: bytes):
+            running["count"] += 1
+            running["max"] = max(running["max"], running["count"])
+            # simulate a slow analysis
+            time.sleep(0.05)
+            running["count"] -= 1
+            return super().execute(session_id, language, audio_bytes)
+
+    def override_timing_use_case() -> AnalyzeAudioSessionUseCase:
+        return TimingUseCase(TimingASR(), TimingAnalyzer())
+
+    app.dependency_overrides[get_analyze_audio_use_case] = override_timing_use_case
+
+    client = TestClient(app)
+
+    def run_session(session_id):
+        with client.websocket_connect("/ws/audio") as ws:
+            assert ws.receive_json()["type"] == "ready"
+            ws.send_json({"type": "config", "session_id": session_id})
+            ws.send_bytes(b"foo")
+            ws.send_json({"type": "end_of_stream"})
+            # wait for result
+            msg = ws.receive_json()
+            assert msg["type"] == "final_result"
+
+    # run two sessions in parallel threads
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as exe:
+        futures = [exe.submit(run_session, f"s{i}") for i in range(2)]
+        for f in futures:
+            f.result()
+
+    # ensure semaphore effectively serialized the work
+    assert running["max"] == 1
+

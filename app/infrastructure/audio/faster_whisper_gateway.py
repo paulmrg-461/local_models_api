@@ -32,6 +32,12 @@ class FasterWhisperASRGateway(ASRGateway):
             "FWHISPER_COMPUTE_TYPE", DEFAULT_COMPUTE_TYPE
         )
 
+        # log our resolved configuration so users can verify which device is
+        # being used. this runs even if the model later falls back to CPU.
+        print(
+            f"FasterWhisperASRGateway initialising model={resolved_model_id} "
+            f"device={resolved_device} compute_type={resolved_compute_type}"
+        )
         try:
             self._model = WhisperModel(
                 resolved_model_id,
@@ -39,13 +45,14 @@ class FasterWhisperASRGateway(ASRGateway):
                 compute_type=resolved_compute_type,
             )
         except RuntimeError as exc:
-            # common case: CUDA OOM during model load. fall back to CPU rather
-            # than crashing the whole server - transcription speed will be
-            # slower but at least the rest of the app remains usable. we also
-            # downgrade compute_type to float32 which is required on CPU by
-            # faster-whisper.
+            # common case: CUDA OOM during model load. by default we fall back
+            # to CPU so the server remains usable, but the user may explicitly
+            # request "GPU only" and prefer a hard failure instead.
             msg = str(exc).lower()
-            if "out of memory" in msg or "cuda" in msg:
+            if ("out of memory" in msg or "cuda" in msg) and not os.getenv(
+                "FWHISPER_REQUIRE_CUDA", "false"
+            ).lower() in ("1", "true", "yes", "on"):
+                # fallback path
                 fallback_device = "cpu"
                 fallback_compute = "float32"
                 print(
@@ -57,6 +64,7 @@ class FasterWhisperASRGateway(ASRGateway):
                     compute_type=fallback_compute,
                 )
             else:
+                # either it wasn’t a CUDA OOM, or the user demanded GPU-only.
                 raise
 
     def transcribe(self, audio_bytes: bytes, language: str) -> List[TranscriptSegment]:

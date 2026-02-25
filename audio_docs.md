@@ -411,4 +411,25 @@ The current setup uses real ASR with `FasterWhisperASRGateway` and a configurabl
 - `CONV_LLM_TORCH_DTYPE` = `bfloat16` | `float16` | `float32`.
 - `CONV_LLM_MAX_NEW_TOKENS` = integer limit for generated tokens.
 
+Whisper ASR also has similar configuration
+via environment variables defined in `app/infrastructure/audio/faster_whisper_gateway.py`:
+
+- `FWHISPER_MODEL_ID` (default `large-v3`) – choose a smaller model if you
+  lack VRAM (e.g. `tiny`, `base`, `medium`).
+- `FWHISPER_DEVICE` (default `cuda`) – set to `cpu` to avoid CUDA OOMs.
+- `FWHISPER_COMPUTE_TYPE` (default `float16`) – lowering precision reduces
+  memory but may slightly affect quality.
+
+When the gateway starts you may see a message like:
+
+```
+⚠️  whisper init OOM on CUDA, retrying on CPU (this may be slow)
+```
+
+This means the selected model could not fit on the GPU and the code is falling
+back to CPU execution. Either picking a smaller model or forcing `FWHISPER_DEVICE`
+back to `cpu` up‑front will avoid the warning (and subsequent slowdown).
+Alternatively, add more VRAM / close other GPU-using applications when running
+both ASR and the conversation LLM on the same `RTX 5070`.
+
 Adjust these variables in your environment or load them from `example.env` before starting the server.

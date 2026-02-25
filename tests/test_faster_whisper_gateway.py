@@ -1,3 +1,4 @@
+import pytest
 from typing import List
 
 from app.domain.audio.interfaces import TranscriptSegment
@@ -52,9 +53,30 @@ def test_gateway_cpu_fallback_on_cuda_oom(monkeypatch, capsys):
     assert isinstance(gw._model, OOMModelFactory)
     # and it should have been created with device='cpu'
     assert gw._model.args[1] == "cpu"
-    # we should have printed a warning message
+    # we should have printed a warning message plus our initialization log
     captured = capsys.readouterr()
     assert "OOM on CUDA" in captured.out or "retrying on CPU" in captured.out
+    assert "initialising model=" in captured.out
+
+
+def test_require_cuda_raises_on_oom(monkeypatch):
+    """If FWHISPER_REQUIRE_CUDA is truthy we should propagate the OOM instead
+    of falling back to CPU.
+    """
+    class OOMModelFactory:
+        def __init__(self, model_id, device=None, compute_type=None):
+            if device == "cuda":
+                raise RuntimeError("CUDA out of memory")
+            self.args = (model_id, device, compute_type)
+
+    monkeypatch.setattr(
+        "app.infrastructure.audio.faster_whisper_gateway.WhisperModel",
+        OOMModelFactory,
+    )
+
+    monkeypatch.setenv("FWHISPER_REQUIRE_CUDA", "true")
+    with pytest.raises(RuntimeError):
+        FasterWhisperASRGateway()
 
 
 def test_gateway_ignores_tiny_audio():

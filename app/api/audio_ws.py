@@ -3,6 +3,7 @@ from typing import Optional
 import io
 import wave
 import logging
+import asyncio
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
@@ -33,6 +34,32 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+
+# To avoid blowing up the machine when multiple clients submit large audio
+# sessions we only allow a single analysis to execute at a time.  Any
+# additional requests will automatically queue by awaiting on the semaphore.
+# The intent is to serialize the expensive call to ``use_case.execute`` so
+# that the GPU/CPU memory footprint stays bounded.
+_analysis_semaphore = asyncio.Semaphore(1)
+
+
+async def _serialize_analysis(
+    use_case: AnalyzeAudioSessionUseCase, session_id: str, language: str, audio_bytes: bytes
+) -> AudioSessionAnalysis:
+    """Run ``use_case.execute`` while holding the global semaphore.
+
+    The *use case* itself is synchronous, so we offload it to a thread
+    pool with ``run_in_executor``.  The semaphore ensures only one thread
+    at a time is performing the expensive analysis, thus queuing any
+    additional requests that arrive while another is running.
+    """
+    async with _analysis_semaphore:
+        loop = asyncio.get_running_loop()
+        # run in default executor (thread pool) to avoid blocking the
+        # event loop during long model inference.
+        return await loop.run_in_executor(
+            None, use_case.execute, session_id, language, audio_bytes
+        )
 
 
 @dataclass
@@ -180,10 +207,8 @@ async def websocket_audio(
                                 wf.setframerate(temp.sample_rate)
                                 wf.writeframes(payload)
                             payload = buf.getvalue()
-                        analysis = use_case.execute(
-                            session_id=temp.session_id,
-                            language=temp.language,
-                            audio_bytes=payload,
+                        analysis = await _serialize_analysis(
+                            use_case, temp.session_id, temp.language, payload
                         )
                         logger.info("analysis on disconnect: %s", asdict(analysis))
                 break
@@ -228,12 +253,10 @@ async def websocket_audio(
                                     wf.writeframes(payload)
                                 payload = buf.getvalue()
                             
-                            # Execute analysis
+                            # Execute analysis (possibly waiting for other sessions)
                             print(">>> AUDIO WEBSOCKET: Iniciando análisis de audio...")
-                            analysis = use_case.execute(
-                                session_id=session.session_id,
-                                language=session.language,
-                                audio_bytes=payload,
+                            analysis = await _serialize_analysis(
+                                use_case, session.session_id, session.language, payload
                             )
                             print(">>> AUDIO WEBSOCKET: Análisis completado. Enviando resultado.")
                             
