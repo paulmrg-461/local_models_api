@@ -240,6 +240,74 @@ Example client flow (pseudo-steps):
 
 This pattern works well for mobile or wearable devices streaming microphone audio in real time.
 
+### Flutter integration notes
+
+If you are writing a Flutter frontend, follow this sequence carefully to avoid
+errors such as "No final_result from local audio backend":
+
+1. Establish the socket with the **WS scheme** (`ws://` or `wss://`), not
+   `http://`.
+
+```dart
+final channel = WebSocketChannel.connect(
+    Uri.parse('ws://192.168.0.6:8989/ws/audio'));
+```
+
+2. **Listen for the server greeting**. The backend sends a
+   `{'type': 'ready'}` JSON message immediately after accepting the
+   connection; wait for it before transmitting anything else.
+
+3. Send configuration as JSON once ready:
+
+```dart
+channel.sink.add(jsonEncode({
+  'type': 'config',
+  'session_id': sessionId,
+  'sample_rate': 16000,
+  'encoding': 'pcm16',
+  'language': 'es',
+}));
+```
+
+4. **Transmit audio as binary frames**. Each frame should be a
+   `Uint8List` containing at least two bytes (one 16‑bit PCM sample). For
+   example, inside a microphone callback:
+
+```dart
+void onAudioData(List<int> pcmBytes) {
+  // pcmBytes must contain real audio data, not a single byte.
+  channel.sink.add(Uint8List.fromList(pcmBytes));
+}
+```
+
+5. After recording, notify the server that the stream has ended:
+
+```dart
+channel.sink.add(jsonEncode({'type': 'end_of_stream'}));
+```
+
+6. **Do not close the socket** until you receive the
+   `final_result` message; closing early yields the "No final_result" error.
+
+7. Handle server responses:
+
+```dart
+channel.stream.listen((message) {
+  final data = jsonDecode(message);
+  switch (data['type']) {
+    case 'ready':
+      // now safe to send config/audio
+      break;
+    case 'final_result':
+      handleAnalysis(data['analysis']);
+      break;
+  }
+});
+```
+
+By following these steps you ensure audio bytes reach the backend and a proper
+analysis is returned. The server logs (`received X bytes...` lines) will
+confirm when data has arrived.
 ---
 
 ## Testing

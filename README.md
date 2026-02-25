@@ -344,8 +344,15 @@ For audio, the goal is to:
 ### Recommended Components
 
 - **ASR**
-  - `faster-whisper` with model `large-v3` running via CTranslate2 on GPU.
-  - Smaller models (`medium`, `small`) are possible if you need to reduce memory or latency.
+  - `faster-whisper` with model `small` running via CTranslate2 on GPU.
+    this default fits within 12 GB of VRAM; if you prefer a higher‑quality
+    checkpoint you can override `FWHISPER_MODEL_ID` (e.g. `medium` or
+    `large-v3`) but be aware that larger models may trigger CUDA OOM errors.
+  - the gateway will automatically fall back to CPU (`compute_type=float32`)
+    in the event of an OOM during model load, printing a warning so the server
+    stays online.
+  - Smaller or faster configurations can be selected via the environment
+    variables `FWHISPER_DEVICE` and `FWHISPER_COMPUTE_TYPE` as well.
 
 - **Diarization**
   - A local diarization pipeline (e.g. NVIDIA NeMo or WhisperX) to assign speakers to segments.
@@ -362,8 +369,10 @@ For audio, the goal is to:
    - Binary or base64 audio chunks.
    - `end_of_stream` message.
 2. Server accumulates audio in an `AudioSession` buffer.
+   - very short payloads (less than two bytes) are ignored to avoid
+     downstream decoding errors; you’ll see a warning if this happens.
 3. On `end_of_stream`:
-   - Run ASR over the full buffer.
+   - Run ASR over the full buffer (unless it was too small).
    - Optionally run diarization to identify speakers.
    - Build a structured prompt and call the local LLM to:
      - Summarize the conversation.

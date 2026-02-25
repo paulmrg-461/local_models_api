@@ -60,6 +60,10 @@ def test_audio_websocket_final_result_message():
     client = TestClient(app)
 
     with client.websocket_connect("/ws/audio") as websocket:
+        # the server now sends a "ready" greeting immediately after accept
+        greeting = websocket.receive_json()
+        assert greeting["type"] == "ready"
+
         websocket.send_json(
             {
                 "type": "config",
@@ -83,4 +87,14 @@ def test_audio_websocket_final_result_message():
         assert analysis["transcript"][0]["text"] == "hello"
         assert len(analysis["action_items"]) == 1
         assert len(analysis["risks"]) == 1
+
+
+def test_audio_websocket_client_disconnect():
+    """Ensure the server handles a client that drops mid‑session gracefully."""
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/audio") as websocket:
+        websocket.send_json({"type": "config", "session_id": "xyz"})
+        websocket.close()  # simulate abrupt client closure
+    # if we reach this point without exceptions the handler cleaned up
 
