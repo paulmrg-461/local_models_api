@@ -60,88 +60,118 @@ async def websocket_audio(
 ) -> None:
     await websocket.accept()
     session: Optional[AudioSession] = None
+    # Forzamos print para que el usuario vea output inmediato en la consola
+    print(">>> AUDIO WEBSOCKET: Conexión aceptada")
     logger.info("audio websocket accepted connection")
-    # let the client know we're ready to receive audio
+    
+    # send ready message
     try:
+        print(">>> AUDIO WEBSOCKET: Enviando mensaje 'ready'...")
         await websocket.send_json({"type": "ready"})
-    except Exception:
-        logger.warning("unable to send ready message")
+        print(">>> AUDIO WEBSOCKET: Mensaje 'ready' enviado")
+    except Exception as e:
+        print(f">>> AUDIO WEBSOCKET: Error al enviar 'ready': {e}")
+        logger.warning("unable to send ready message, client might have disconnected")
+        return
 
     try:
         while True:
             try:
+                # Use receive() to get the raw message event, allowing us to inspect the type
                 message = await websocket.receive()
             except WebSocketDisconnect:
-                logger.info("websocket_disconnect exception raised")
+                print(">>> AUDIO WEBSOCKET: Cliente desconectado (WebSocketDisconnect)")
+                logger.info("client disconnected (WebSocketDisconnect)")
+                break
+            except Exception as e:
+                print(f">>> AUDIO WEBSOCKET: Error recibiendo mensaje: {e}")
+                logger.warning("error receiving message: %s", e)
                 break
 
-            logger.debug("received ws message: %s", message)
-            # log any unexpected message fields for diagnostics
-            if not ("text" in message or "bytes" in message):
-                logger.warning("unhandled message type: %s", message)
+            msg_type_event = message.get("type")
 
-            # proper handling of disconnect events avoids the runtime error
-            # seen in tests when the client closes immediately after sending.
-            if message.get("type") == "websocket.disconnect":
-                logger.info("received explicit disconnect message")
+            if msg_type_event == "websocket.disconnect":
+                print(">>> AUDIO WEBSOCKET: Recibido evento de desconexión")
+                logger.info("received websocket.disconnect event")
                 break
-
+            
             if "text" in message:
-                import json
+                try:
+                    import json
+                    data = json.loads(message["text"])
+                    client_msg_type = data.get("type")
+                    print(f">>> AUDIO WEBSOCKET: Recibido mensaje de texto tipo '{client_msg_type}'")
+                    
+                    if client_msg_type == "config":
+                        session = AudioSession.create(
+                            session_id=data.get("session_id", "unknown"),
+                            sample_rate=data.get("sample_rate", 16000),
+                            encoding=data.get("encoding", "pcm16"),
+                            language=data.get("language", "es"),
+                        )
+                        print(f">>> AUDIO WEBSOCKET: Sesión configurada: {session.session_id}")
+                        logger.info("configured session: %s", session.session_id)
 
-                data = json.loads(message["text"])
-                msg_type = data.get("type")
-                logger.debug("parsed text message type: %s", msg_type)
+                    elif client_msg_type == "end_of_stream":
+                        if session:
+                            print(f">>> AUDIO WEBSOCKET: Fin de stream recibido. Buffer: {len(session.audio_buffer)} bytes")
+                            logger.info("end_of_stream received. buffer size: %d", len(session.audio_buffer))
+                            
+                            # Prepare audio bytes (PCM16 -> WAV if needed)
+                            payload = bytes(session.audio_buffer)
+                            
+                            if session.encoding.lower() == "pcm16" and len(payload) > 0:
+                                buf = io.BytesIO()
+                                with wave.open(buf, "wb") as wf:
+                                    wf.setnchannels(1)
+                                    wf.setsampwidth(2)
+                                    wf.setframerate(session.sample_rate)
+                                    wf.writeframes(payload)
+                                payload = buf.getvalue()
+                            
+                            # Execute analysis
+                            print(">>> AUDIO WEBSOCKET: Iniciando análisis de audio...")
+                            analysis = use_case.execute(
+                                session_id=session.session_id,
+                                language=session.language,
+                                audio_bytes=payload,
+                            )
+                            print(">>> AUDIO WEBSOCKET: Análisis completado. Enviando resultado.")
+                            
+                            # Send result
+                            await websocket.send_json({
+                                "type": "final_result",
+                                "analysis": asdict(analysis),
+                            })
+                            
+                            # Clear buffer
+                            session.audio_buffer = bytearray()
+                        else:
+                            print(">>> AUDIO WEBSOCKET: Fin de stream pero sin sesión configurada")
+                            logger.warning("end_of_stream received but no session configured")
+                
+                except json.JSONDecodeError:
+                    print(">>> AUDIO WEBSOCKET: Error decodificando JSON")
+                    logger.warning("received invalid json text")
+                except Exception as e:
+                    print(f">>> AUDIO WEBSOCKET: Error procesando texto: {e}")
+                    logger.exception("error processing text message: %s", e)
 
-                if msg_type == "config":
-                    session = AudioSession.create(
-                        session_id=data.get("session_id", "unknown"),
-                        sample_rate=data.get("sample_rate", 16000),
-                        encoding=data.get("encoding", "pcm16"),
-                        language=data.get("language", "es"),
-                    )
-                    logger.info("created new audio session %s", session.session_id)
-
-                if msg_type == "end_of_stream":
-                    if session is None:
-                        logger.warning("end_of_stream received but no session configured")
-                    else:
-                        logger.info("end_of_stream received, processing audio")
-                        payload = bytes(session.audio_buffer)
-                        if not payload:
-                            logger.warning("end_of_stream but audio buffer is empty")
-                        if len(payload) < 2:
-                            logger.warning("audio buffer too small (%d bytes), skipping ASR", len(payload))
-                        if session.encoding.lower() == "pcm16" and len(payload) >= 2:
-                            buf = io.BytesIO()
-                            with wave.open(buf, "wb") as wf:
-                                wf.setnchannels(1)
-                                wf.setsampwidth(2)
-                                wf.setframerate(session.sample_rate)
-                                wf.writeframes(payload)
-                            payload = buf.getvalue()
-
-                    analysis: AudioSessionAnalysis = use_case.execute(
-                        session_id=session.session_id,
-                        language=session.language,
-                        audio_bytes=payload,
-                    )
-                    logger.info("audio analysis complete for %s", session.session_id)
-                    await websocket.send_json(
-                        {
-                            "type": "final_result",
-                            "analysis": asdict(analysis),
-                        }
-                    )
-                    session.audio_buffer = bytearray()
-
-            if "bytes" in message and session is not None:
-                raw_bytes = message["bytes"]
-                session.add_bytes(raw_bytes)
-                logger.info("received %d bytes of audio, buffer now %d bytes",
-                            len(raw_bytes), len(session.audio_buffer))
-
-    except Exception as exc:  # catch anything unexpected and log
-        logger.exception("unexpected error in audio websocket: %s", exc)
+            elif "bytes" in message:
+                if session:
+                    chunk_size = len(message["bytes"])
+                    # Solo imprimimos cada 10 chunks o si es grande para no saturar, pero el usuario quiere ver ALGO
+                    # Mejor imprimimos siempre un puntito o un mensaje corto
+                    # print(f">>> AUDIO: Recibidos {chunk_size} bytes") 
+                    session.add_bytes(message["bytes"])
+                else:
+                    print(">>> AUDIO WEBSOCKET: Recibidos bytes sin sesión configurada (ignorado)")
+                    # Client sending bytes before config? ignore or log warning
+                    pass
+            
+    except Exception as exc:
+        print(f">>> AUDIO WEBSOCKET: Error inesperado en bucle principal: {exc}")
+        logger.exception("unexpected error in audio websocket loop: %s", exc)
     finally:
+        print(">>> AUDIO WEBSOCKET: Cerrando conexión")
         logger.info("audio websocket closing")
