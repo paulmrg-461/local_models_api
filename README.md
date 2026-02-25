@@ -288,7 +288,44 @@ def run_vision_model(image: Image.Image) -> str:
         clean_up_tokenization_spaces=False,
     )
 
-    return output_text[0].strip()
+    description = output_text[0].strip()
+
+    # if the model replies with a stock apology we add a quick second pass to
+    # coax out a proper description. the alternate prompt simply repeats the
+    # original instructions and asks again "please describe the image without
+    # any apologies"; this mirrors the retry logic in
+    # `QwenVisionModel.analyze`. clients should rarely see the apology text
+    # after this retry, but if it still occurs it will be returned verbatim.
+    if description.lower().startswith("lo siento") or "no puedo" in description.lower():
+        # build a more forceful prompt and retry (duplicate of above logic for
+        # the standalone script)
+        alt_prompt = (
+            "Act as an expert visual assistant. "
+            "Describe in detail what you see: people, objects, "
+            "environment, and relevant activities. Indicate if "
+            "anything looks dangerous or unusual and explain why. "
+            "If appropriate, suggest useful actions or recommendations "
+            "for the person taking the picture. Answer in Spanish. "
+            "Por favor, describe la imagen sin ningún tipo de disculpa."
+        )
+        # regenerate
+        text = vl_processor.apply_chat_template([{"role":"user","content":[{"type":"image","image":image},{"type":"text","text":alt_prompt}]}],
+                                               tokenize=False, add_generation_prompt=True)
+        inputs = vl_processor(text=[text], images=image_inputs, videos=video_inputs,
+                               padding=True, return_tensors="pt").to("cuda")
+        with torch.no_grad():
+            generated_ids = vl_model.generate(**inputs, max_new_tokens=256)
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):]
+            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        output_text = vl_processor.batch_decode(
+            generated_ids_trimmed, skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )
+        description = output_text[0].strip()
+
+    return description
 ```
 
 You can wire this function into the `/vision/frame` and `/vision/frame_b64` endpoints.
@@ -378,14 +415,14 @@ This format is easy to consume from your mobile app or other services and lets y
 From your virtual environment:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8989 --reload
 ```
 
 On the mobile client (same network), you then point to:
 
-- `ws://SERVER_IP:8000/ws/audio`
-- `http://SERVER_IP:8000/vision/frame`
-- `http://SERVER_IP:8000/vision/frame_b64`
+- `ws://SERVER_IP:8989/ws/audio`
+- `http://SERVER_IP:8989/vision/frame`
+- `http://SERVER_IP:8989/vision/frame_b64`
 
 ---
 
@@ -495,7 +532,7 @@ This keeps use cases independent from specific model implementations and makes i
 - Create a venv and install dependencies (`requirements.txt`).
 - Run the server with:
   ```bash
-  uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  uvicorn app.main:app --host 0.0.0.0 --port 8989 --reload
   ```
 - Run tests:
   ```bash

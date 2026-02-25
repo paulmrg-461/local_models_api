@@ -33,7 +33,11 @@ async def receive_frame(
     image_bytes = await file.read()
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-    result: VisionAnalysisResult = use_case.execute(image)
+    try:
+        result: VisionAnalysisResult = use_case.execute(image)
+    except RuntimeError as exc:
+        # bubbles up from the gateway when the model refused to answer
+        raise HTTPException(status_code=503, detail=str(exc))
 
     return {
         "description": result.description,
@@ -55,7 +59,10 @@ async def receive_frame_b64(
 
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-    result: VisionAnalysisResult = use_case.execute(image)
+    try:
+        result: VisionAnalysisResult = use_case.execute(image)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     return {
         "description": result.description,

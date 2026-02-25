@@ -62,6 +62,11 @@ async def websocket_audio(
         while True:
             message = await websocket.receive()
 
+            # proper handling of disconnect events avoids the runtime error
+            # seen in tests when the client closes immediately after sending.
+            if message.get("type") == "websocket.disconnect":
+                break
+
             if "text" in message:
                 import json
 

@@ -14,6 +14,11 @@ The vision feature provides a local, GPU-accelerated visual assistant that:
 - Identifies possible danger or unusual situations for the person taking the picture.
 - Suggests useful actions or recommendations when appropriate.
 
+The service includes a small recovery step: if the underlying Qwen2.5-VL model responds
+with a generic apology (e.g. "Lo siento, pero…"), the gateway automatically retries
+with a firmer prompt asking it to describe the image without apologizing.  This greatly
+reduces the number of spurious refusals you see when running locally.
+
 All processing happens locally on your hardware (RTX 5070 12GB or similar), without sending data to external cloud services.
 
 ---
@@ -38,6 +43,12 @@ The implementation follows a clean architecture approach with clear separation o
     - `POST /vision/frame` for multipart image uploads.
     - `POST /vision/frame_b64` for base64-encoded images in JSON.
 
+> **Note:** the underlying Qwen2.5-VL model may occasionally respond with
+> a generic apology such as "Lo siento, pero..." when it opts not to provide
+> a full description. the service now returns whatever text the model emits
+> (including these apologies) rather than converting them into errors. this
+> behaviour mirrors the standalone GPU script and avoids surprising clients
+> with 5xx responses.
 ---
 
 ## Implementation Details
@@ -150,7 +161,7 @@ Upload an image via `multipart/form-data`.
 Example with `curl`:
 
 ```bash
-curl -X POST "http://localhost:8000/vision/frame" \
+curl -X POST "http://localhost:8989/vision/frame" \
   -F "file=@/path/to/image.jpg" \
   -F "session_id=example-session"
 ```
@@ -196,7 +207,7 @@ Example with `curl`:
 ```bash
 IMAGE_B64=$(base64 -w0 /path/to/image.jpg)
 
-curl -X POST "http://localhost:8000/vision/frame_b64" \
+curl -X POST "http://localhost:8989/vision/frame_b64" \
   -H "Content-Type: application/json" \
   -d "{
     \"image_b64\": \"${IMAGE_B64}\",
@@ -234,7 +245,7 @@ with status `400 Bad Request`.
 With your Python virtual environment activated and dependencies installed:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8989 --reload
 ```
 
 Then:

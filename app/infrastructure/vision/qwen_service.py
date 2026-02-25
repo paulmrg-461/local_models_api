@@ -48,25 +48,40 @@ class QwenVisionModel(VisionModelGateway):
     def analyze(self, image: Image.Image) -> VisionAnalysisResult:
         from qwen_vl_utils import process_vision_info
 
+        # build the standard chat message with an explicit "no apologies"
+        # clause.  in practice the model still sometimes responds with a
+        # boilerplate "Lo siento..." string, so we detect that case and
+        # perform a second pass using an even stronger prompt.  this allows the
+        # API to recover in many real‑world situations where the default safety
+        # filter would otherwise short‑circuit the description.
+        base_prompt = (
+            "Act as an expert visual assistant. "
+            "Describe in detail what you see: people, objects, "
+            "environment, and relevant activities. Indicate if "
+            "anything looks dangerous or unusual and explain why. "
+            "If appropriate, suggest useful actions or recommendations "
+            "for the person taking the picture. Answer in Spanish. "
+            "Do not say 'Lo siento' or 'No puedo'; always return a description."
+        )
+
         messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": image},
-                    {
-                        "type": "text",
-                        "text": (
-                            "Act as an expert visual assistant. "
-                            "Describe in detail what you see: people, objects, "
-                            "environment, and relevant activities. Indicate if "
-                            "anything looks dangerous or unusual and explain why. "
-                            "If appropriate, suggest useful actions or recommendations "
-                            "for the person taking the picture. Answer in Spanish."
-                        ),
-                    },
-                ],
-            }
+            {"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": base_prompt}]}
         ]
+
+        description = self._run_model(messages)
+
+        # if the model still refused, try once more with an even more forceful
+        # instruction.  we avoid an infinite loop by only retrying a single time.
+        if description.lower().startswith("lo siento") or "no puedo" in description.lower():
+            alt_prompt = base_prompt + " Por favor, describe la imagen sin ningún tipo de disculpa."
+            messages[0]["content"][1]["text"] = alt_prompt
+            description = self._run_model(messages)
+
+        return VisionAnalysisResult(description=description)
+
+    def _run_model(self, messages: list) -> str:
+        """Execute the processor/model pipeline and return the decoded text."""
+        from qwen_vl_utils import process_vision_info
 
         text = self._processor.apply_chat_template(
             messages,
@@ -107,4 +122,5 @@ class QwenVisionModel(VisionModelGateway):
             clean_up_tokenization_spaces=False,
         )
 
-        return VisionAnalysisResult(description=output_text[0].strip())
+        return output_text[0].strip()
+

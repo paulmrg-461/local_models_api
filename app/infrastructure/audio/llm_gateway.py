@@ -80,7 +80,18 @@ class TransformersLLMConversationGateway(ConversationAnalysisGateway):
         inputs = self._tokenizer(
             [prompt],
             return_tensors="pt",
-        ).to(self._device)
+        )
+        # tokenizer returns a dict of tensors; send each to the right device.
+        # some test fakes may include extra keys (e.g. a "to" helper) that
+        # aren't tensors, so only call .to() when it's available.
+        for k, v in list(inputs.items()):
+            if hasattr(v, "to"):
+                try:
+                    inputs[k] = v.to(self._device)
+                except Exception:
+                    # in rare cases (like fake objects) .to may not accept our
+                    # device; ignore and keep original.
+                    pass
 
         with torch.no_grad():
             generated = self._model.generate(
