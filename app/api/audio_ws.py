@@ -13,6 +13,22 @@ from app.infrastructure.audio.dummy_pipeline import DummyConversationAnalysisGat
 from app.infrastructure.audio.faster_whisper_gateway import FasterWhisperASRGateway
 from app.infrastructure.audio.llm_gateway import TransformersLLMConversationGateway
 
+
+# Configuration constants that guard against unbounded buffering. Values
+# can be overridden through environment variables so deployments can tune
+# limits based on available RAM, GPU memory, or expected session lengths.
+#
+# - ``AUDIO_WS_MAX_PRECONFIG_BYTES``: bytes to buffer before client sends a
+#   configuration message (default 5 MiB).
+# - ``AUDIO_WS_MAX_SESSION_BYTES``: bytes to buffer after configuration,
+#   i.e. the maximum length of a single audio session (default 50 MiB).
+#
+# These limits exist to prevent a misbehaving client from filling up RAM and
+# crashing the process; when exceeded the connection is terminated with an
+# error code.
+MAX_PRECONFIG_BUFFER = int(os.getenv("AUDIO_WS_MAX_PRECONFIG_BYTES", 5 * 1024 * 1024))
+MAX_SESSION_BUFFER = int(os.getenv("AUDIO_WS_MAX_SESSION_BYTES", 50 * 1024 * 1024))
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +54,14 @@ class AudioSession:
         )
 
     def add_bytes(self, data: bytes) -> None:
+        # guard against a single conversation growing without bounds. if the
+        # limit is hit we raise; the outer websocket handler will convert that
+        # into a clean shutdown so the whole process doesn't crash due to an
+        # errant client.
+        if len(self.audio_buffer) + len(data) > MAX_SESSION_BUFFER:
+            raise MemoryError(
+                f"session audio buffer would exceed {MAX_SESSION_BUFFER} bytes"
+            )
         self.audio_buffer.extend(data)
 
 
@@ -60,6 +84,10 @@ async def websocket_audio(
 ) -> None:
     await websocket.accept()
     session: Optional[AudioSession] = None
+    # buffer bytes that may arrive before a config message
+    pre_config_buffer = bytearray()
+
+
     # Forzamos print para que el usuario vea output inmediato en la consola
     print(">>> AUDIO WEBSOCKET: Conexión aceptada")
     logger.info("audio websocket accepted connection")
@@ -82,6 +110,40 @@ async def websocket_audio(
             except WebSocketDisconnect:
                 print(">>> AUDIO WEBSOCKET: Cliente desconectado (WebSocketDisconnect)")
                 logger.info("client disconnected (WebSocketDisconnect)")
+                # a genuine SocketDisconnect event triggers the same cleanup we
+                # perform for an explicit ``websocket.disconnect`` message, so
+                # reuse the helper below.
+                def _handle_implicit_end():
+                    if session or pre_config_buffer:
+                        print(">>> AUDIO WEBSOCKET: Desconexión con datos de audio pendientes, ejecutando análisis local...")
+                        logger.info("disconnect triggered implicit end_of_stream")
+                        temp = session
+                        if not temp and pre_config_buffer:
+                            temp = AudioSession.create(
+                                session_id="auto",
+                                sample_rate=16000,
+                                encoding="pcm16",
+                                language="es",
+                            )
+                            temp.add_bytes(bytes(pre_config_buffer))
+                            pre_config_buffer.clear()
+                        if temp:
+                            payload = bytes(temp.audio_buffer)
+                            if temp.encoding.lower() == "pcm16" and len(payload) > 0:
+                                buf = io.BytesIO()
+                                with wave.open(buf, "wb") as wf:
+                                    wf.setnchannels(1)
+                                    wf.setsampwidth(2)
+                                    wf.setframerate(temp.sample_rate)
+                                    wf.writeframes(payload)
+                                payload = buf.getvalue()
+                            analysis = use_case.execute(
+                                session_id=temp.session_id,
+                                language=temp.language,
+                                audio_bytes=payload,
+                            )
+                            logger.info("analysis on disconnect: %s", asdict(analysis))
+                _handle_implicit_end()
                 break
             except Exception as e:
                 print(f">>> AUDIO WEBSOCKET: Error recibiendo mensaje: {e}")
@@ -93,6 +155,37 @@ async def websocket_audio(
             if msg_type_event == "websocket.disconnect":
                 print(">>> AUDIO WEBSOCKET: Recibido evento de desconexión")
                 logger.info("received websocket.disconnect event")
+                # run the same implicit end‑of‑stream cleanup as in the
+                # WebSocketDisconnect exception handler
+                if session or pre_config_buffer:
+                    print(">>> AUDIO WEBSOCKET: Desconexión con datos de audio pendientes, ejecutando análisis local...")
+                    logger.info("disconnect triggered implicit end_of_stream")
+                    temp = session
+                    if not temp and pre_config_buffer:
+                        temp = AudioSession.create(
+                            session_id="auto",
+                            sample_rate=16000,
+                            encoding="pcm16",
+                            language="es",
+                        )
+                        temp.add_bytes(bytes(pre_config_buffer))
+                        pre_config_buffer.clear()
+                    if temp:
+                        payload = bytes(temp.audio_buffer)
+                        if temp.encoding.lower() == "pcm16" and len(payload) > 0:
+                            buf = io.BytesIO()
+                            with wave.open(buf, "wb") as wf:
+                                wf.setnchannels(1)
+                                wf.setsampwidth(2)
+                                wf.setframerate(temp.sample_rate)
+                                wf.writeframes(payload)
+                            payload = buf.getvalue()
+                        analysis = use_case.execute(
+                            session_id=temp.session_id,
+                            language=temp.language,
+                            audio_bytes=payload,
+                        )
+                        logger.info("analysis on disconnect: %s", asdict(analysis))
                 break
             
             if "text" in message:
@@ -103,12 +196,18 @@ async def websocket_audio(
                     print(f">>> AUDIO WEBSOCKET: Recibido mensaje de texto tipo '{client_msg_type}'")
                     
                     if client_msg_type == "config":
+                        # initialize session; if we already buffered bytes, move them in
                         session = AudioSession.create(
                             session_id=data.get("session_id", "unknown"),
                             sample_rate=data.get("sample_rate", 16000),
                             encoding=data.get("encoding", "pcm16"),
                             language=data.get("language", "es"),
                         )
+                        if pre_config_buffer:
+                            session.add_bytes(bytes(pre_config_buffer))
+                            print(f">>> AUDIO WEBSOCKET: Migrados {len(pre_config_buffer)} bytes preconfigurados al buffer de sesión")
+                            logger.info("migrated %d pre-config bytes into session", len(pre_config_buffer))
+                            pre_config_buffer.clear()
                         print(f">>> AUDIO WEBSOCKET: Sesión configurada: {session.session_id}")
                         logger.info("configured session: %s", session.session_id)
 
@@ -146,6 +245,21 @@ async def websocket_audio(
                             
                             # Clear buffer
                             session.audio_buffer = bytearray()
+                        elif pre_config_buffer:
+                            # no explicit config was ever received; auto‑create a default session
+                            print(">>> AUDIO WEBSOCKET: end_of_stream sin sesión, pero hay bytes preconfigurados, creando sesión temporal")
+                            logger.info("end_of_stream with buffer but no session; auto-configuring")
+                            session = AudioSession.create(
+                                session_id="auto",
+                                sample_rate=16000,
+                                encoding="pcm16",
+                                language="es",
+                            )
+                            session.add_bytes(bytes(pre_config_buffer))
+                            pre_config_buffer.clear()
+                            # and re‑enter same logic by continuing loop iteration
+                            # (we could duplicate, but easier to call recursively)
+                            continue
                         else:
                             print(">>> AUDIO WEBSOCKET: Fin de stream pero sin sesión configurada")
                             logger.warning("end_of_stream received but no session configured")
@@ -160,13 +274,39 @@ async def websocket_audio(
             elif "bytes" in message:
                 if session:
                     chunk_size = len(message["bytes"])
-                    # Solo imprimimos cada 10 chunks o si es grande para no saturar, pero el usuario quiere ver ALGO
-                    # Mejor imprimimos siempre un puntito o un mensaje corto
-                    # print(f">>> AUDIO: Recibidos {chunk_size} bytes") 
-                    session.add_bytes(message["bytes"])
+                    try:
+                        session.add_bytes(message["bytes"])
+                    except MemoryError as me:
+                        # buffer grew too big; we cannot continue safely.
+                        logger.error("session buffer overflow: %s", me)
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "audio too large for this session",
+                        })
+                        await websocket.close(code=1009)  # 1009 = message too big
+                        break
                 else:
-                    print(">>> AUDIO WEBSOCKET: Recibidos bytes sin sesión configurada (ignorado)")
-                    # Client sending bytes before config? ignore or log warning
+                    # buffer bytes until we know session config, but enforce a cap
+                    incoming = len(message["bytes"])
+                    if len(pre_config_buffer) + incoming > MAX_PRECONFIG_BUFFER:
+                        logger.warning(
+                            "pre-config buffer would exceed %d bytes, discarding %d bytes",
+                            MAX_PRECONFIG_BUFFER,
+                            incoming,
+                        )
+                        # optionally inform client once
+                        try:
+                            await websocket.send_json({
+                                "type": "warning",
+                                "message": "data received before config discarded",
+                            })
+                        except Exception:
+                            pass
+                    else:
+                        pre_config_buffer.extend(message["bytes"])
+                        print(f">>> AUDIO WEBSOCKET: Recibidos {incoming} bytes antes de configurar sesión (almacenados)")
+                        logger.warning("received %d bytes before session config, buffering", incoming)
+                    # do not discard; wait for config
                     pass
             
     except Exception as exc:
