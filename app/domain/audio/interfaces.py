@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -30,7 +30,12 @@ class AudioSessionAnalysis:
 
 class ASRGateway(ABC):
     @abstractmethod
-    def transcribe(self, audio_bytes: bytes, language: str) -> List[TranscriptSegment]:
+    def transcribe(
+        self,
+        audio_bytes: bytes,
+        language: str,
+        filename: Optional[str] = None,
+    ) -> List[TranscriptSegment]:
         raise NotImplementedError
 
 

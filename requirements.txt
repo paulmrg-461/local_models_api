@@ -6,5 +6,7 @@ transformers
 qwen-vl-utils
 faster-whisper
 sentencepiece
+funasr
+modelscope
 pytest
 httpx

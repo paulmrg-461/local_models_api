@@ -59,15 +59,23 @@ class FasterWhisperASRGateway(ASRGateway):
             else:
                 raise
 
-    def transcribe(self, audio_bytes: bytes, language: str) -> List[TranscriptSegment]:
+    def transcribe(
+        self,
+        audio_bytes: bytes,
+        language: str,
+        filename: Optional[str] = None,
+    ) -> List[TranscriptSegment]:
         # if we have fewer than 2 bytes there is no valid PCM16 frame
         if not audio_bytes or len(audio_bytes) < 2:
-            # avoid calling whisper/ffmpeg on a nonsense file; the library
-            # would otherwise print an "Invalid PCM packet" warning and
-            # potentially raise.
             return []
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        suffix = ".wav"
+        if filename:
+            _, ext = os.path.splitext(filename)
+            if ext:
+                suffix = ext
+
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(audio_bytes)
             tmp_path = tmp.name
 

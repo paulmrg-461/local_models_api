@@ -135,6 +135,7 @@ async def websocket_audio(
                                 session_id=session.session_id,
                                 language=session.language,
                                 audio_bytes=payload,
+                                filename=f"stream_{session.session_id}.wav" # Default to wav for streaming
                             )
                             print(">>> AUDIO WEBSOCKET: Análisis completado. Enviando resultado.")
                             

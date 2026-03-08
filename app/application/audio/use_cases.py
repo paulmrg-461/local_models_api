@@ -1,3 +1,4 @@
+from typing import Optional
 from app.domain.audio.interfaces import (
     ASRGateway,
     AudioSessionAnalysis,
@@ -23,9 +24,10 @@ class AnalyzeAudioSessionUseCase:
         session_id: str,
         language: str,
         audio_bytes: bytes,
+        filename: Optional[str] = None,
     ) -> AudioSessionAnalysis:
         logger.info("use case execute: transcribing %d bytes", len(audio_bytes))
-        segments = self.asr_gateway.transcribe(audio_bytes, language)
+        segments = self.asr_gateway.transcribe(audio_bytes, language, filename=filename)
         logger.info("transcription yielded %d segments", len(segments))
         for seg in segments:
             logger.info("segment: [%0.2f-%0.2f] %s", seg.start, seg.end, seg.text)
