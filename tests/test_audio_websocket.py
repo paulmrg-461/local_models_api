@@ -1,6 +1,7 @@
+import pytest
 from fastapi.testclient import TestClient
 
-from app.api.audio_ws import get_analyze_audio_use_case
+from app.api.audio_ws import get_analyze_audio_use_case, MAX_PRECONFIG_BUFFER, MAX_SESSION_BUFFER
 from app.application.audio.use_cases import AnalyzeAudioSessionUseCase
 from app.domain.audio.interfaces import (
     ActionItem,
@@ -13,7 +14,12 @@ from app.main import app
 
 
 class FakeASR(ASRGateway):
+    # record each call for assertions
+    calls = []
+
     def transcribe(self, audio_bytes: bytes, language: str) -> list[TranscriptSegment]:
+        # store the length of bytes received so tests can inspect
+        FakeASR.calls.append(len(audio_bytes))
         return [
             TranscriptSegment(
                 speaker="S1",
@@ -90,11 +96,171 @@ def test_audio_websocket_final_result_message():
 
 
 def test_audio_websocket_client_disconnect():
-    """Ensure the server handles a client that drops mid‑session gracefully."""
+    """Ensure the server handles a client that drops mid‑session gracefully.
+
+    When the connection closes the handler now treats it as an implicit
+    ``end_of_stream`` and runs the analysis logic (although no result is
+    returned because the socket is gone). We verify that the ASR gateway
+    was invoked with the buffered bytes.
+    """
+    FakeASR.calls.clear()
     client = TestClient(app)
 
     with client.websocket_connect("/ws/audio") as websocket:
         websocket.send_json({"type": "config", "session_id": "xyz"})
+        websocket.send_bytes(b"abc123")
         websocket.close()  # simulate abrupt client closure
-    # if we reach this point without exceptions the handler cleaned up
+
+    # should have invoked ASR once with the buffered audio length. the
+    # gateway receives whatever payload we constructed (wav header + raw
+    # samples), so we simply assert that it was called and the value is
+    # non‑zero rather than hard‑coding a byte count.
+    assert len(FakeASR.calls) == 1
+    assert FakeASR.calls[0] > 0
+
+
+def test_bytes_before_config_buffered():
+    """If bytes arrive before the config message we buffer them and use them after config."""
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/audio") as websocket:
+        # the server greeting
+        assert websocket.receive_json()["type"] == "ready"
+
+        # send a small chunk before config
+        websocket.send_bytes(b"preconfig")
+        websocket.send_json({
+            "type": "config",
+            "session_id": "buff",
+            "sample_rate": 16000,
+            "encoding": "pcm16",
+            "language": "es",
+        })
+        websocket.send_bytes(b"postconfig")
+        websocket.send_json({"type": "end_of_stream"})
+
+        msg = websocket.receive_json()
+        assert msg["type"] == "final_result"
+        # the fake ASR doesn't inspect bytes but we at least ensure there's no error
+
+
+def test_end_of_stream_without_config_uses_buffer():
+    """Send bytes first, no config, then end_of_stream; server should still reply."""
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/audio") as websocket:
+        assert websocket.receive_json()["type"] == "ready"
+        websocket.send_bytes(b"onlythis")
+        websocket.send_json({"type": "end_of_stream"})
+        msg = websocket.receive_json()
+        assert msg["type"] == "final_result"
+
+
+def test_pre_config_buffer_limit():
+    """Ensure the pre‑config buffer never grows past the cap.
+
+    Sending more than ``MAX_PRECONFIG_BUFFER`` bytes before a config message
+    should not crash the server; the excess is dropped and the final result is
+    still delivered. The fake ASR gateway records how many bytes were
+    actually passed to it so we assert that the call length is smaller than
+    what we sent.
+    """
+    client = TestClient(app)
+    big = b"A" * (MAX_PRECONFIG_BUFFER + 1024)
+
+    with client.websocket_connect("/ws/audio") as websocket:
+        assert websocket.receive_json()["type"] == "ready"
+        websocket.send_bytes(big)
+        websocket.send_json({
+            "type": "config",
+            "session_id": "big",
+            "sample_rate": 16000,
+            "encoding": "pcm16",
+            "language": "es",
+        })
+        websocket.send_json({"type": "end_of_stream"})
+        msg = websocket.receive_json()
+        assert msg["type"] == "final_result"
+
+    # the ASR gateway should have been called, and the argument length must be
+    # less than the original big blob because some data were discarded.
+    assert FakeASR.calls
+    assert FakeASR.calls[0] < len(big)
+
+
+def test_session_buffer_limit_closes():
+    """If a configured session receives too much audio we close the socket.
+
+    We monkey‑patch the module constant to a very small value so that the
+    overflow happens quickly and deterministically.
+    """
+    client = TestClient(app)
+    # temporarily shrink the limit to provoke the error
+    import app.api.audio_ws as aws
+    aws.MAX_SESSION_BUFFER = 10
+
+    with client.websocket_connect("/ws/audio") as websocket:
+        assert websocket.receive_json()["type"] == "ready"
+        websocket.send_json({"type": "config", "session_id": "tiny"})
+        # send more than the tiny limit
+        websocket.send_bytes(b"X" * 20)
+        # the server should have closed the connection; any receive will raise
+        from starlette.websockets import WebSocketDisconnect
+        with pytest.raises(WebSocketDisconnect):
+            websocket.receive_json()
+
+
+def test_analysis_serialization():
+    """Only one session should be analysed at a time. If two clients send
+    audio simultaneously we rely on the module semaphore to queue them.  The
+    fake use case records how many executions run concurrently; the value must
+    never exceed one.
+    """
+    # create a use case whose execute method sleeps and tracks concurrent runs
+    import time
+
+    running = {"count": 0, "max": 0}
+
+    class TimingASR(FakeASR):
+        pass
+
+    class TimingAnalyzer(FakeConversationAnalyzer):
+        pass
+
+    class TimingUseCase(AnalyzeAudioSessionUseCase):
+        def execute(self, session_id: str, language: str, audio_bytes: bytes):
+            running["count"] += 1
+            running["max"] = max(running["max"], running["count"])
+            # simulate a slow analysis
+            time.sleep(0.05)
+            running["count"] -= 1
+            return super().execute(session_id, language, audio_bytes)
+
+    def override_timing_use_case() -> AnalyzeAudioSessionUseCase:
+        return TimingUseCase(TimingASR(), TimingAnalyzer())
+
+    app.dependency_overrides[get_analyze_audio_use_case] = override_timing_use_case
+
+    client = TestClient(app)
+
+    def run_session(session_id):
+        with client.websocket_connect("/ws/audio") as ws:
+            assert ws.receive_json()["type"] == "ready"
+            ws.send_json({"type": "config", "session_id": session_id})
+            ws.send_bytes(b"foo")
+            ws.send_json({"type": "end_of_stream"})
+            # wait for result
+            msg = ws.receive_json()
+            assert msg["type"] == "final_result"
+
+    # run two sessions in parallel threads
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as exe:
+        futures = [exe.submit(run_session, f"s{i}") for i in range(2)]
+        for f in futures:
+            f.result()
+
+    # ensure semaphore effectively serialized the work
+    assert running["max"] == 1
 

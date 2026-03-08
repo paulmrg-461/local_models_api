@@ -188,10 +188,50 @@ ws://SERVER_HOST:PORT/ws/audio
 ```
 
 - On `config`, the server initializes an `AudioSession` instance.
-- On binary messages, it appends data to `audio_buffer`.
-- On `end_of_stream`, the server:
-  - Calls `AnalyzeAudioSessionUseCase.execute(session_id, language, audio_bytes)`.
-  - Sends a final JSON message:
+  - If any audio bytes have already arrived before the config, they are **buffered
+    temporarily** and migrated into the session once it is created.
+  - This protects against clients that accidentally send audio first. The server
+    logs the number of bytes buffered and later migrated.
+- On binary messages, the bytes are appended to the current session's buffer. If
+  there is no active session yet, the bytes are stored in the pre-config
+  buffer instead (and later migrated on config or end-of-stream).
+
+#### Memory limits and configuration
+
+To prevent a single client from overflowing server memory, the handler enforces
+hard caps on both the pre‑config and per‑session audio buffers. By default the
+limits are 5 MiB and 50 MiB respectively, but you can override them with
+environment variables before starting the application:
+
+```bash
+export AUDIO_WS_MAX_PRECONFIG_BYTES=1048576       # 1 MiB pre‑config buffer
+export AUDIO_WS_MAX_SESSION_BYTES=20971520         # 20 MiB session buffer
+```
+
+If a client exceeds either limit the server will send a JSON error message and
+close the socket with code 1009 (message too big). The feature is especially
+useful on memory‑constrained hosts (e.g. Raspberry Pi, small VMs, or when
+running alongside other GPU workloads). It also guards against runaway
+buffering when the system is already under pressure (your RTX 5070, for
+example, may latch onto every incoming byte and fill its 12 GB of VRAM if the
+session is allowed to grow unbounded).
+
+- Using modest limits is particularly important when the same machine is
+  running both ASR and LLM models; the VRAM consumed by one model plus the
+  RAM consumed by audio buffers can quickly exhaust resources.
+
+The remainder of the protocol is unchanged:
+- On `end_of_stream`, one of three things happens:
+  1. If a session exists, the buffered audio is processed normally.
+  2. If no session has ever been configured but there is buffered audio, the
+     server will **auto-create a temporary session with default parameters**
+     (`session_id="auto"`, `sample_rate=16000`, `encoding="pcm16"`,
+     `language="es"`) and then process the data. This guarantees that the
+     conversation is analyzed even if the client forgot to send a config.
+  3. If neither a session nor buffered audio exists, the message is ignored and
+     a warning is logged.
+
+Regardless of the path, after analysis the server sends a final JSON message:
 
 ```json
 {
@@ -370,5 +410,26 @@ The current setup uses real ASR with `FasterWhisperASRGateway` and a configurabl
 - `CONV_LLM_DEVICE` = `cuda` or `cpu`.
 - `CONV_LLM_TORCH_DTYPE` = `bfloat16` | `float16` | `float32`.
 - `CONV_LLM_MAX_NEW_TOKENS` = integer limit for generated tokens.
+
+Whisper ASR also has similar configuration
+via environment variables defined in `app/infrastructure/audio/faster_whisper_gateway.py`:
+
+- `FWHISPER_MODEL_ID` (default `large-v3`) – choose a smaller model if you
+  lack VRAM (e.g. `tiny`, `base`, `medium`).
+- `FWHISPER_DEVICE` (default `cuda`) – set to `cpu` to avoid CUDA OOMs.
+- `FWHISPER_COMPUTE_TYPE` (default `float16`) – lowering precision reduces
+  memory but may slightly affect quality.
+
+When the gateway starts you may see a message like:
+
+```
+⚠️  whisper init OOM on CUDA, retrying on CPU (this may be slow)
+```
+
+This means the selected model could not fit on the GPU and the code is falling
+back to CPU execution. Either picking a smaller model or forcing `FWHISPER_DEVICE`
+back to `cpu` up‑front will avoid the warning (and subsequent slowdown).
+Alternatively, add more VRAM / close other GPU-using applications when running
+both ASR and the conversation LLM on the same `RTX 5070`.
 
 Adjust these variables in your environment or load them from `example.env` before starting the server.

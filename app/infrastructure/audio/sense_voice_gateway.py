@@ -1,7 +1,11 @@
 import os
 import logging
 import tempfile
+import io
+import re
 from typing import List, Optional
+import librosa
+import numpy as np
 from funasr import AutoModel
 from app.domain.audio.interfaces import ASRGateway, TranscriptSegment
 
@@ -25,12 +29,17 @@ class SenseVoiceASRGateway(ASRGateway):
                 vad_model=vad_model,
                 vad_kwargs={"max_single_segment_time": 30000},
                 trust_remote_code=True,
-                device=device
+                device=device,
+                disable_update=True # Avoid slow checks on startup
             )
             logger.info("SenseVoice model loaded successfully")
         except Exception as e:
             logger.error("Failed to load SenseVoice model: %s", e)
             raise
+
+    def _clean_text(self, text: str) -> str:
+        """Removes acoustic and language tags like <|en|>, <|HAPPY|>, etc."""
+        return re.sub(r"<\|.*?\|>", "", text).strip()
 
     def transcribe(
         self,
@@ -41,27 +50,30 @@ class SenseVoiceASRGateway(ASRGateway):
         if not audio_bytes:
             return []
 
-        # Determine suffix from original filename
-        suffix = ".wav"
-        if filename:
-            _, ext = os.path.splitext(filename)
-            if ext:
-                suffix = ext
-
-        # Save to temporary file. Now that FFmpeg is installed, 
-        # SenseVoice (funasr) will be able to decode .ogg, .mp3, etc.
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-
         try:
+            # Load and normalize audio to avoid hallucinations due to low volume or noise
+            logger.info("Loading and normalizing audio with librosa...")
+            audio_io = io.BytesIO(audio_bytes)
+            y, sr = librosa.load(audio_io, sr=16000)
+            
+            if len(y) == 0:
+                return []
+                
+            # Normalize amplitude to -1.0 to 1.0 range
+            max_val = np.max(np.abs(y))
+            if max_val > 0:
+                y = y / max_val
+            
+            duration = len(y) / sr
+            logger.info("Audio processed: %.2fs", duration)
+
+            # Map "es" to the specific code SenseVoice expects if needed, 
+            # but usually "es" or "auto" works if the model is loaded correctly.
             target_lang = language if language != "auto" else "auto"
             
-            logger.info("Processing file with SenseVoiceSmall: %s (lang=%s)", tmp_path, target_lang)
-            
-            # We use the file path directly. funasr will use ffmpeg to load it.
+            logger.info("Inference with SenseVoiceSmall (lang=%s)...", target_lang)
             res = self._model.generate(
-                input=tmp_path,
+                input=y,
                 cache={},
                 language=target_lang,
                 use_itn=True,
@@ -71,29 +83,26 @@ class SenseVoiceASRGateway(ASRGateway):
             )
 
             if not res or len(res) == 0:
-                logger.warning("SenseVoice returned no results")
                 return []
 
-            full_text = res[0].get("text", "").strip()
+            raw_text = res[0].get("text", "")
+            clean_text = self._clean_text(raw_text)
             
-            if not full_text:
+            logger.info("Raw output: %s", raw_text)
+            logger.info("Clean output: %s", clean_text)
+            
+            if not clean_text:
                 return []
 
             return [
                 TranscriptSegment(
                     speaker="Speaker",
                     start=0.0,
-                    end=0.0,
-                    text=full_text
+                    end=duration,
+                    text=clean_text
                 )
             ]
 
         except Exception as e:
             logger.exception("Error during SenseVoice transcription: %s", e)
             return []
-        finally:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
