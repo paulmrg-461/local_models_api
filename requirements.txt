@@ -4,9 +4,11 @@ pillow
 torch
 transformers
 qwen-vl-utils
+huggingface_hub
 faster-whisper
 sentencepiece
 funasr
 modelscope
+pydub
 pytest
 httpx
