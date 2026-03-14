@@ -78,6 +78,8 @@ class TransformersLLMConversationGateway(ConversationAnalysisGateway):
                 resolved_model_id,
                 quantization_config=quantization_config,
                 device_map="auto",
+                low_cpu_mem_usage=True,
+                offload_folder="offload",
             )
         except Exception as e:
             logger.warning(f"Could not load in 4-bit mode ({e}), falling back to {dtype}")

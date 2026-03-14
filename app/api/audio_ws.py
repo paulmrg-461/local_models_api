@@ -285,17 +285,20 @@ async def websocket_audio(
                             audio_seconds = len(payload) / (session.sample_rate * 2) # assuming pcm16
                             if audio_seconds < 0.5:
                                 print(f">>> AUDIO WEBSOCKET: Audio demasiado corto ({audio_seconds:.2f}s), omitiendo análisis.")
-                                await websocket.send_json({
-                                    "type": "final_result",
-                                    "analysis": asdict(AudioSessionAnalysis(
-                                        session_id=session.session_id,
-                                        language=session.language,
-                                        transcript=[],
-                                        summary="Audio demasiado corto para analizar.",
-                                        action_items=[],
-                                        risks=[]
-                                    )),
-                                })
+                                try:
+                                    await websocket.send_json({
+                                        "type": "final_result",
+                                        "analysis": asdict(AudioSessionAnalysis(
+                                            session_id=session.session_id,
+                                            language=session.language,
+                                            transcript=[],
+                                            summary="Audio demasiado corto para analizar.",
+                                            action_items=[],
+                                            risks=[]
+                                        )),
+                                    })
+                                except Exception:
+                                    pass
                                 session.audio_buffer = bytearray()
                                 continue
 
@@ -312,10 +315,13 @@ async def websocket_audio(
                             print(f">>> AUDIO WEBSOCKET: Análisis completado. Transcripción: '{transcription_text}'")
                             
                             # Send result
-                            await websocket.send_json({
-                                "type": "final_result",
-                                "analysis": asdict(analysis),
-                            })
+                            try:
+                                await websocket.send_json({
+                                    "type": "final_result",
+                                    "analysis": asdict(analysis),
+                                })
+                            except Exception as e:
+                                print(f">>> AUDIO WEBSOCKET: No se pudo enviar resultado (conexión cerrada): {e}")
                             
                             # Clear buffer
                             session.audio_buffer = bytearray()

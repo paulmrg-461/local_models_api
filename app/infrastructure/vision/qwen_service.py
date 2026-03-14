@@ -53,6 +53,8 @@ class QwenVisionModel(VisionModelGateway):
                 quantization_config=quantization_config,
                 device_map="auto",
                 trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                offload_folder="offload",
             )
         except Exception as e:
             logger.warning(f"Could not load vision in 4-bit ({e}), using {dtype} on {device}")
