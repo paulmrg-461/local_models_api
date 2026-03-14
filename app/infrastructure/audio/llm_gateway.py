@@ -129,7 +129,12 @@ class TransformersLLMConversationGateway(ConversationAnalysisGateway):
         )[0].strip()
 
         try:
-            data = json.loads(output_text)
+            # Try to find JSON block in case model added extra text
+            json_match = re.search(r'\{.*\}', output_text, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group())
+            else:
+                data = json.loads(output_text)
         except Exception:
             data = {
                 "summary": output_text,
@@ -173,12 +178,11 @@ class TransformersLLMConversationGateway(ConversationAnalysisGateway):
 
         if language.lower().startswith("es"):
             instruction = (
-                "Eres un asistente personal inteligente que analiza recuerdos y conversaciones. "
-                "Basado en la transcripción, genera un JSON con:\n"
-                "1. 'summary': Un resumen narrativo que interprete lo realizado como un recuerdo de vida.\n"
-                "2. 'action_items': Una lista de objetos {title, description, steps} con tareas pendientes identificadas.\n"
-                "3. 'risks': Una lista de posibles soluciones a problemas mencionados o sugerencias de mejora.\n"
-                "El JSON debe ser estrictamente válido."
+                "Eres un asistente personal experto. Analiza la conversación y devuelve un JSON válido con:\n"
+                "1. 'summary': Resumen narrativo estilo recuerdo de vida (máximo 3 párrafos).\n"
+                "2. 'action_items': Tareas pendientes identificadas [{title, description, steps}].\n"
+                "3. 'risks': Soluciones a problemas o sugerencias de mejora.\n"
+                "Responde SOLO el JSON, sin texto extra antes o después."
             )
 
         return f"{instruction}\n\nTranscript:\n{transcript_text}\n\nJSON:"

@@ -63,6 +63,7 @@ class AnalyzeAudioSessionUseCase:
                     f.write("="*30 + "\n")
                     f.write("RESUMEN E INTERPRETACIÓN (IA):\n")
                     f.write("="*30 + "\n")
+                    # Check if analysis.summary is raw JSON or actual summary
                     f.write(f"{analysis.summary}\n\n")
                     
                     if analysis.action_items:
