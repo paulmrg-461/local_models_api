@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import List, Optional
 
@@ -12,6 +13,7 @@ from app.domain.audio.interfaces import (
     TranscriptSegment,
 )
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_BACKEND = "TRANSFORMERS"
 DEFAULT_MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
@@ -61,13 +63,32 @@ class TransformersLLMConversationGateway(ConversationAnalysisGateway):
             dtype = torch.float16
 
         self._tokenizer = AutoTokenizer.from_pretrained(resolved_model_id, use_fast=True)
-        self._model = AutoModelForCausalLM.from_pretrained(
-            resolved_model_id,
-            torch_dtype=dtype,
-            device_map=resolved_device,
-        )
+        
+        # Optimize for VRAM usage using 4-bit quantization if possible
+        try:
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+            logger.info(f"Loading LLM {resolved_model_id} in 4-bit mode for VRAM optimization")
+            self._model = AutoModelForCausalLM.from_pretrained(
+                resolved_model_id,
+                quantization_config=quantization_config,
+                device_map="auto",
+            )
+        except Exception as e:
+            logger.warning(f"Could not load in 4-bit mode ({e}), falling back to {dtype}")
+            self._model = AutoModelForCausalLM.from_pretrained(
+                resolved_model_id,
+                torch_dtype=dtype,
+                device_map="auto",
+            )
+        
         self._max_new_tokens = resolved_max_new_tokens
-        self._device = resolved_device
+        self._device = self._model.device
 
     def analyze(
         self,

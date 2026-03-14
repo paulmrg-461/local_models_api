@@ -44,14 +44,22 @@ async def transcribe_with_whisper(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Empty audio file provided")
 
-    gateway = get_whisper_gateway()
+    # Use the singleton from audio_ws to avoid OOM
+    from app.api.audio_ws import get_analyze_audio_use_case
+    use_case = get_analyze_audio_use_case()
     
     try:
-        segments: List[TranscriptSegment] = gateway.transcribe(
-            audio_bytes, 
-            language, 
+        # Use serialize_analysis to ensure only one model runs at a time
+        from app.api.audio_ws import _serialize_analysis
+        analysis = await _serialize_analysis(
+            use_case, 
+            session_id="file_upload", 
+            language=language, 
+            audio_bytes=audio_bytes,
             filename=file.filename
         )
+        
+        segments = analysis.transcript
         
         if not segments:
             return {

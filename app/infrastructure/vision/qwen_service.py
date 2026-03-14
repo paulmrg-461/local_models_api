@@ -1,5 +1,6 @@
 from typing import List
 import os
+import logging
 
 import torch
 from PIL import Image
@@ -8,6 +9,7 @@ from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProce
 
 from app.domain.vision.interfaces import VisionAnalysisResult, VisionModelGateway
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
 DEFAULT_DEVICE = "cuda"
@@ -35,11 +37,31 @@ class QwenVisionModel(VisionModelGateway):
             dtype = torch.float16
 
         self._device = device
-        self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-        ).to(device)
+        
+        # Optimize for VRAM: load in 4-bit quantization if possible
+        try:
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+            logger.info(f"Loading Vision Model {model_id} in 4-bit mode for VRAM optimization")
+            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_id,
+                quantization_config=quantization_config,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+        except Exception as e:
+            logger.warning(f"Could not load vision in 4-bit ({e}), using {dtype} on {device}")
+            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_id,
+                torch_dtype=dtype,
+                trust_remote_code=True,
+            ).to(device)
+
         self._processor = Qwen2_5_VLProcessor.from_pretrained(
             model_id,
             trust_remote_code=True,

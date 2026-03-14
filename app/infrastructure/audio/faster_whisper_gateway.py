@@ -73,6 +73,7 @@ class FasterWhisperASRGateway(ASRGateway):
                 resolved_model_id,
                 device=resolved_device,
                 compute_type=resolved_compute_type,
+                download_root=os.getenv("WHISPER_MODEL_PATH") # Optional: custom path
             )
         except RuntimeError as exc:
             # common case: CUDA OOM during model load. by default we fall back

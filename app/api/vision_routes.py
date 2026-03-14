@@ -19,9 +19,14 @@ class VisionFrameB64Request(BaseModel):
     session_id: Optional[str] = None
 
 
+# Global singleton for Vision Model
+_vision_gateway: Optional[QwenVisionModel] = None
+
 def get_analyze_image_use_case() -> AnalyzeImageUseCase:
-    gateway = QwenVisionModel()
-    return AnalyzeImageUseCase(gateway)
+    global _vision_gateway
+    if _vision_gateway is None:
+        _vision_gateway = QwenVisionModel()
+    return AnalyzeImageUseCase(_vision_gateway)
 
 
 @router.post("/vision/frame")
