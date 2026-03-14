@@ -173,9 +173,12 @@ class TransformersLLMConversationGateway(ConversationAnalysisGateway):
 
         if language.lower().startswith("es"):
             instruction = (
-                "Eres un asistente experto de reuniones. Analiza la transcripción y devuelve un JSON "
-                "con: summary (string), action_items (array de {title, description, steps}), y risks "
-                "(array de strings). El JSON debe ser estrictamente válido."
+                "Eres un asistente personal inteligente que analiza recuerdos y conversaciones. "
+                "Basado en la transcripción, genera un JSON con:\n"
+                "1. 'summary': Un resumen narrativo que interprete lo realizado como un recuerdo de vida.\n"
+                "2. 'action_items': Una lista de objetos {title, description, steps} con tareas pendientes identificadas.\n"
+                "3. 'risks': Una lista de posibles soluciones a problemas mencionados o sugerencias de mejora.\n"
+                "El JSON debe ser estrictamente válido."
             )
 
         return f"{instruction}\n\nTranscript:\n{transcript_text}\n\nJSON:"

@@ -6,6 +6,7 @@ torch
 transformers
 qwen-vl-utils
 huggingface_hub
+bitsandbytes>=0.46.1
 faster-whisper
 sentencepiece
 funasr

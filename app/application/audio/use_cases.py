@@ -35,7 +35,14 @@ class AnalyzeAudioSessionUseCase:
         logger.info("use case execute: transcribing %d bytes", len(audio_bytes))
         segments = self.asr_gateway.transcribe(audio_bytes, language, filename=filename)
         
-        # Save transcription to a text file
+        logger.info("transcription yielded %d segments", len(segments))
+        for seg in segments:
+            logger.info("segment: [%0.2f-%0.2f] %s", seg.start, seg.end, seg.text)
+        
+        # 1. Analizar con LLM
+        analysis = self.conversation_gateway.analyze(session_id, language, segments)
+
+        # 2. Guardar transcripción Y análisis en el archivo de texto
         if segments:
             full_text = " ".join([s.text for s in segments])
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -44,19 +51,37 @@ class AnalyzeAudioSessionUseCase:
             
             try:
                 with open(transcript_file, "w", encoding="utf-8") as f:
-                    f.write(f"Session ID: {session_id}\n")
-                    f.write(f"Timestamp: {timestamp}\n")
-                    f.write(f"Language: {language}\n")
-                    f.write(f"Filename: {filename}\n")
-                    f.write("-" * 20 + "\n")
-                    f.write(full_text)
-                logger.info("Saved transcription to %s", transcript_file)
+                    f.write(f"ID DE SESIÓN: {session_id}\n")
+                    f.write(f"FECHA: {timestamp}\n")
+                    f.write(f"IDIOMA: {language}\n")
+                    f.write(f"ARCHIVO ORIGINAL: {filename}\n")
+                    f.write("\n" + "="*30 + "\n")
+                    f.write("TRANSCRIPCIÓN ORIGINAL:\n")
+                    f.write("="*30 + "\n")
+                    f.write(full_text + "\n\n")
+                    
+                    f.write("="*30 + "\n")
+                    f.write("RESUMEN E INTERPRETACIÓN (IA):\n")
+                    f.write("="*30 + "\n")
+                    f.write(f"{analysis.summary}\n\n")
+                    
+                    if analysis.action_items:
+                        f.write("TAREAS PENDIENTES IDENTIFICADAS:\n")
+                        for item in analysis.action_items:
+                            f.write(f"- {item.title}: {item.description}\n")
+                            for step in item.steps:
+                                f.write(f"  * {step}\n")
+                        f.write("\n")
+                    
+                    if analysis.risks:
+                        f.write("SOLUCIONES Y SUGERENCIAS:\n")
+                        for risk in analysis.risks:
+                            f.write(f"- {risk}\n")
+                        f.write("\n")
+
+                logger.info("Saved transcription and analysis to %s", transcript_file)
             except Exception as e:
                 logger.error("Failed to save transcription to file: %s", e)
 
-        logger.info("transcription yielded %d segments", len(segments))
-        for seg in segments:
-            logger.info("segment: [%0.2f-%0.2f] %s", seg.start, seg.end, seg.text)
-        analysis = self.conversation_gateway.analyze(session_id, language, segments)
         return analysis
 
