@@ -1,8 +1,11 @@
 import os
 import tempfile
+import io
+import re
 from typing import List, Optional
 
 from faster_whisper import WhisperModel
+from pydub import AudioSegment
 
 from app.domain.audio.interfaces import ASRGateway, TranscriptSegment
 
@@ -13,6 +16,17 @@ DEFAULT_MODEL_ID = "small"
 DEFAULT_DEVICE = "cuda"
 DEFAULT_COMPUTE_TYPE = "float16"
 
+# Known Whisper hallucinations to filter out
+WHISPER_HALLUCINATIONS = [
+    r"subtítulos por la comunidad de amara\.org",
+    r"¡suscríbete!",
+    r"suscríbete",
+    r"gracias por ver el video",
+    r"thanks for watching",
+    r"amara\.org",
+    r"community subtitles",
+    r"subtítulos por la comunidad",
+]
 
 class FasterWhisperASRGateway(ASRGateway):
     def __init__(
@@ -26,7 +40,11 @@ class FasterWhisperASRGateway(ASRGateway):
             self._model = model
             return
 
-        resolved_model_id = model_id or os.getenv("FWHISPER_MODEL_ID", DEFAULT_MODEL_ID)
+        resolved_model_id = model_id or os.getenv("FWHISPER_MODEL_ID")
+        if not resolved_model_id:
+            print(f"⚠️  FWHISPER_MODEL_ID no encontrada en env, usando default: {DEFAULT_MODEL_ID}")
+            resolved_model_id = DEFAULT_MODEL_ID
+            
         resolved_device = device or os.getenv("FWHISPER_DEVICE", DEFAULT_DEVICE)
         resolved_compute_type = compute_type or os.getenv(
             "FWHISPER_COMPUTE_TYPE", DEFAULT_COMPUTE_TYPE
@@ -67,6 +85,46 @@ class FasterWhisperASRGateway(ASRGateway):
                 # either it wasn’t a CUDA OOM, or the user demanded GPU-only.
                 raise
 
+    def _is_hallucination(self, text: str) -> bool:
+        """Checks if a given text is a known Whisper hallucination."""
+        clean_text = text.strip().lower()
+        if not clean_text:
+            return True
+            
+        # If it's just punctuation, it's noise
+        if re.match(r'^[.,!?;:\s]+$', clean_text):
+            return True
+            
+        for pattern in WHISPER_HALLUCINATIONS:
+            if re.search(pattern, clean_text):
+                return True
+        return False
+
+    def _prepare_audio(self, audio_bytes: bytes) -> str:
+        """Prepares audio for Whisper: 16kHz, Mono, Normalized."""
+        try:
+            audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+            
+            # Normalize and boost slightly
+            audio = audio.set_frame_rate(16000).set_channels(1)
+            audio = audio.normalize()
+            audio = audio + 3 # +3dB boost
+            
+            # Add a bit of silence at the ends to prevent truncation
+            silence = AudioSegment.silent(duration=300, frame_rate=16000)
+            audio = silence + audio + silence
+            
+            fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+            os.close(fd)
+            audio.export(tmp_path, format="wav")
+            return tmp_path
+        except Exception as e:
+            # Fallback to direct write
+            fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+            with os.fdopen(fd, 'wb') as f:
+                f.write(audio_bytes)
+            return tmp_path
+
     def transcribe(
         self,
         audio_bytes: bytes,
@@ -77,24 +135,25 @@ class FasterWhisperASRGateway(ASRGateway):
         if not audio_bytes or len(audio_bytes) < 2:
             return []
 
-        suffix = ".wav"
-        if filename:
-            _, ext = os.path.splitext(filename)
-            if ext:
-                suffix = ext
-
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
+        tmp_path = self._prepare_audio(audio_bytes)
 
         try:
+            # Transcribe with VAD filtering to reduce hallucinations
             segments, _ = self._model.transcribe(
                 tmp_path,
                 language=language or None,
+                vad_filter=True,
+                vad_parameters=dict(min_speech_duration_ms=500),
+                initial_prompt="Conversación en español, clara y directa.",
             )
             results: List[TranscriptSegment] = []
             for segment in segments:
-                txt = str(segment.text)
+                txt = str(segment.text).strip()
+                
+                # Filter out hallucinations
+                if self._is_hallucination(txt):
+                    continue
+                    
                 results.append(
                     TranscriptSegment(
                         speaker="S1",

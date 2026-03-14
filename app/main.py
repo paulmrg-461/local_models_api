@@ -1,4 +1,9 @@
 from fastapi import FastAPI
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env
+load_dotenv()
 
 from app.api.audio_ws import router as audio_router
 from app.api.vision_routes import router as vision_router

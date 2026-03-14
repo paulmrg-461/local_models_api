@@ -8,7 +8,7 @@ import asyncio
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from app.application.audio.use_cases import AnalyzeAudioSessionUseCase
-from app.domain.audio.interfaces import AudioSessionAnalysis
+from app.domain.audio.interfaces import AudioSessionAnalysis, ConversationAnalysisGateway
 import os
 from app.infrastructure.audio.dummy_pipeline import DummyConversationAnalysisGateway
 from app.infrastructure.audio.faster_whisper_gateway import FasterWhisperASRGateway
@@ -44,7 +44,7 @@ _analysis_semaphore = asyncio.Semaphore(1)
 
 
 async def _serialize_analysis(
-    use_case: AnalyzeAudioSessionUseCase, session_id: str, language: str, audio_bytes: bytes
+    use_case: AnalyzeAudioSessionUseCase, session_id: str, language: str, audio_bytes: bytes, filename: Optional[str] = None
 ) -> AudioSessionAnalysis:
     """Run ``use_case.execute`` while holding the global semaphore.
 
@@ -58,7 +58,7 @@ async def _serialize_analysis(
         # run in default executor (thread pool) to avoid blocking the
         # event loop during long model inference.
         return await loop.run_in_executor(
-            None, use_case.execute, session_id, language, audio_bytes
+            None, use_case.execute, session_id, language, audio_bytes, filename
         )
 
 
@@ -92,16 +92,28 @@ class AudioSession:
         self.audio_buffer.extend(data)
 
 
+# Global singleton instances to avoid reloading models on every connection (and OOM errors)
+_asr_gateway: Optional[FasterWhisperASRGateway] = None
+_conversation_gateway: Optional[ConversationAnalysisGateway] = None
+_analyze_audio_use_case: Optional[AnalyzeAudioSessionUseCase] = None
+
 def get_analyze_audio_use_case() -> AnalyzeAudioSessionUseCase:
-    asr_gateway = FasterWhisperASRGateway()
+    global _asr_gateway, _conversation_gateway, _analyze_audio_use_case
+    
+    if _analyze_audio_use_case is None:
+        if _asr_gateway is None:
+            _asr_gateway = FasterWhisperASRGateway()
 
-    use_real_llm = os.getenv("CONV_LLM_ENABLED", "false").lower() in ("1", "true", "yes", "on")
-    if use_real_llm:
-        conversation_gateway = TransformersLLMConversationGateway()
-    else:
-        conversation_gateway = DummyConversationAnalysisGateway()
+        if _conversation_gateway is None:
+            use_real_llm = os.getenv("CONV_LLM_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+            if use_real_llm:
+                _conversation_gateway = TransformersLLMConversationGateway()
+            else:
+                _conversation_gateway = DummyConversationAnalysisGateway()
+        
+        _analyze_audio_use_case = AnalyzeAudioSessionUseCase(_asr_gateway, _conversation_gateway)
 
-    return AnalyzeAudioSessionUseCase(asr_gateway, conversation_gateway)
+    return _analyze_audio_use_case
 
 
 @router.websocket("/ws/audio")
@@ -140,7 +152,7 @@ async def websocket_audio(
                 # a genuine SocketDisconnect event triggers the same cleanup we
                 # perform for an explicit ``websocket.disconnect`` message, so
                 # reuse the helper below.
-                def _handle_implicit_end():
+                async def _handle_implicit_end():
                     if session or pre_config_buffer:
                         print(">>> AUDIO WEBSOCKET: Desconexión con datos de audio pendientes, ejecutando análisis local...")
                         logger.info("disconnect triggered implicit end_of_stream")
@@ -164,13 +176,20 @@ async def websocket_audio(
                                     wf.setframerate(temp.sample_rate)
                                     wf.writeframes(payload)
                                 payload = buf.getvalue()
-                            analysis = use_case.execute(
-                                session_id=temp.session_id,
-                                language=temp.language,
-                                audio_bytes=payload,
+                            
+                            audio_seconds = len(payload) / (temp.sample_rate * 2)
+                            print(f">>> AUDIO WEBSOCKET: Desconexión, analizando {len(payload)} bytes ({audio_seconds:.2f}s)...")
+                            analysis = await _serialize_analysis(
+                                use_case, 
+                                temp.session_id, 
+                                temp.language, 
+                                payload,
+                                filename=f"disconnect_{temp.session_id}.wav"
                             )
+                            transcription_text = " ".join([s.text for s in analysis.transcript]) if analysis.transcript else "VACÍA"
+                            print(f">>> AUDIO WEBSOCKET: Análisis de desconexión completado. Transcripción: '{transcription_text}'")
                             logger.info("analysis on disconnect: %s", asdict(analysis))
-                _handle_implicit_end()
+                await _handle_implicit_end()
                 break
             except Exception as e:
                 print(f">>> AUDIO WEBSOCKET: Error recibiendo mensaje: {e}")
@@ -207,9 +226,18 @@ async def websocket_audio(
                                 wf.setframerate(temp.sample_rate)
                                 wf.writeframes(payload)
                             payload = buf.getvalue()
+                        
+                        audio_seconds = len(payload) / (temp.sample_rate * 2)
+                        print(f">>> AUDIO WEBSOCKET: Evento disconnect, analizando {len(payload)} bytes ({audio_seconds:.2f}s)...")
                         analysis = await _serialize_analysis(
-                            use_case, temp.session_id, temp.language, payload
+                            use_case, 
+                            temp.session_id, 
+                            temp.language, 
+                            payload,
+                            filename=f"disconnect_event_{temp.session_id}.wav"
                         )
+                        transcription_text = " ".join([s.text for s in analysis.transcript]) if analysis.transcript else "VACÍA"
+                        print(f">>> AUDIO WEBSOCKET: Análisis de evento disconnect completado. Transcripción: '{transcription_text}'")
                         logger.info("analysis on disconnect: %s", asdict(analysis))
                 break
             
@@ -253,15 +281,35 @@ async def websocket_audio(
                                     wf.writeframes(payload)
                                 payload = buf.getvalue()
                             
+                            # Check minimum duration (e.g., 0.5s) to avoid hallucinations
+                            audio_seconds = len(payload) / (session.sample_rate * 2) # assuming pcm16
+                            if audio_seconds < 0.5:
+                                print(f">>> AUDIO WEBSOCKET: Audio demasiado corto ({audio_seconds:.2f}s), omitiendo análisis.")
+                                await websocket.send_json({
+                                    "type": "final_result",
+                                    "analysis": asdict(AudioSessionAnalysis(
+                                        session_id=session.session_id,
+                                        language=session.language,
+                                        transcript=[],
+                                        summary="Audio demasiado corto para analizar.",
+                                        action_items=[],
+                                        risks=[]
+                                    )),
+                                })
+                                session.audio_buffer = bytearray()
+                                continue
+
                             # Execute analysis (possibly waiting for other sessions)
-                            print(">>> AUDIO WEBSOCKET: Iniciando análisis de audio...")
-                            analysis = use_case.execute(
-                                session_id=session.session_id,
-                                language=session.language,
-                                audio_bytes=payload,
-                                filename=f"stream_{session.session_id}.wav" # Default to wav for streaming
+                            print(f">>> AUDIO WEBSOCKET: Iniciando análisis de audio ({len(payload)} bytes, {audio_seconds:.2f}s)...")
+                            analysis = await _serialize_analysis(
+                                use_case, 
+                                session.session_id, 
+                                session.language, 
+                                payload,
+                                filename=f"stream_{session.session_id}.wav"
                             )
-                            print(">>> AUDIO WEBSOCKET: Análisis completado. Enviando resultado.")
+                            transcription_text = " ".join([s.text for s in analysis.transcript]) if analysis.transcript else "VACÍA"
+                            print(f">>> AUDIO WEBSOCKET: Análisis completado. Transcripción: '{transcription_text}'")
                             
                             # Send result
                             await websocket.send_json({
