@@ -26,6 +26,12 @@ WHISPER_HALLUCINATIONS = [
     r"amara\.org",
     r"community subtitles",
     r"subtítulos por la comunidad",
+    r"gracias por ver este video",
+    r"muchas gracias por ver",
+    r"see you in the next video",
+    r"hasta el próximo vídeo",
+    r"reeditado por",
+    r"editado por",
 ]
 
 class FasterWhisperASRGateway(ASRGateway):
@@ -49,6 +55,12 @@ class FasterWhisperASRGateway(ASRGateway):
         resolved_compute_type = compute_type or os.getenv(
             "FWHISPER_COMPUTE_TYPE", DEFAULT_COMPUTE_TYPE
         )
+
+        # Set HF token for libraries if present
+        hf_token = os.getenv("HF_TOKEN")
+        if hf_token:
+            os.environ["HF_TOKEN"] = hf_token
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
 
         # log our resolved configuration so users can verify which device is
         # being used. this runs even if the model later falls back to CPU.
@@ -139,12 +151,21 @@ class FasterWhisperASRGateway(ASRGateway):
 
         try:
             # Transcribe with VAD filtering to reduce hallucinations
+            # beam_size=5 increases accuracy for long sessions
+            # patience=2.0 helps with Spanish consistency
             segments, _ = self._model.transcribe(
                 tmp_path,
                 language=language or None,
                 vad_filter=True,
-                vad_parameters=dict(min_speech_duration_ms=500),
-                initial_prompt="Conversación en español, clara y directa.",
+                vad_parameters=dict(
+                    min_speech_duration_ms=400,
+                    speech_pad_ms=400,
+                    min_silence_duration_ms=500
+                ),
+                initial_prompt="Conversación en español, clara y directa. Transcripción fiel palabra por palabra.",
+                beam_size=5,
+                patience=2.0,
+                no_speech_threshold=0.6,
             )
             results: List[TranscriptSegment] = []
             for segment in segments:
