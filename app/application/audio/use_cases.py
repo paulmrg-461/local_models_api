@@ -9,6 +9,8 @@ from app.domain.audio.interfaces import (
 import os
 import logging
 from datetime import datetime
+import httpx
+from dataclasses import asdict
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,9 @@ class AnalyzeAudioSessionUseCase:
         self.transcriptions_dir = "transcriptions"
         if not os.path.exists(self.transcriptions_dir):
             os.makedirs(self.transcriptions_dir)
+        
+        # RAG Service URL
+        self.rag_service_url = os.getenv("RAG_SERVICE_URL", "http://localhost:8000")
 
     def execute(
         self,
@@ -42,9 +47,33 @@ class AnalyzeAudioSessionUseCase:
         # 1. Analizar con LLM
         analysis = self.conversation_gateway.analyze(session_id, language, segments)
 
-        # 2. Guardar transcripción Y análisis en el archivo de texto
+        full_text = " ".join([s.text for s in segments]) if segments else ""
+
+        # 2. Guardar en DB Vectorial (RAG Service)
+        if full_text:
+            try:
+                # Prepare payload according to rag_docs.md
+                payload = {
+                    "transcript_original": full_text,
+                    "interpretation": {
+                        "summary": analysis.summary,
+                        "action_items": [asdict(item) for item in analysis.action_items],
+                        "risks": analysis.risks
+                    }
+                }
+                
+                logger.info("Sending memory to RAG Service: %s", self.rag_service_url)
+                # We do a fire-and-forget or simple sync call here. 
+                # Since this is a sync use case called in a threadpool, a sync post is fine.
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.post(f"{self.rag_service_url}/user/memories/", json=payload)
+                    response.raise_for_status()
+                    logger.info("Successfully stored memory in RAG Service")
+            except Exception as e:
+                logger.error("Failed to store memory in RAG Service: %s", e)
+
+        # 3. Guardar transcripción Y análisis en el archivo de texto local (Backup)
         if segments:
-            full_text = " ".join([s.text for s in segments])
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_filename = filename.replace(" ", "_") if filename else "session"
             transcript_file = os.path.join(self.transcriptions_dir, f"transcript_{timestamp}_{safe_filename}.txt")
