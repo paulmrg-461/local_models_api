@@ -28,7 +28,7 @@ class AnalyzeAudioSessionUseCase:
             os.makedirs(self.transcriptions_dir)
         
         # RAG Service URL
-        self.rag_service_url = os.getenv("RAG_SERVICE_URL", "http://localhost:8000")
+        self.rag_service_url = os.getenv("RAG_SERVICE_URL", "http://localhost:8787")
 
     def execute(
         self,

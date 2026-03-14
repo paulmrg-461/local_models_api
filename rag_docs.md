@@ -40,7 +40,7 @@ Para responder a la pregunta **"¿Puedo ver el historial de memories?"**, he act
 
 **Ejemplo de consulta (cURL):**
 ```bash
-curl "http://localhost:8000/user/memories/?limit=10"
+curl "http://localhost:8787/user/memories/?limit=10"
 ```
 
 ---
