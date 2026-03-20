@@ -67,4 +67,27 @@ Nuevas variables clave:
 
 ---
 
+## 6. Endpoints de Audio (REST & WebSocket)
+
+Se han habilitado tres vías principales para procesar audio, optimizadas para diferentes casos de uso:
+
+### **A. Tiempo Real (WebSocket)**
+- **Ruta**: `ws://SERVER_IP:8989/ws/audio`
+- **Uso**: Diseñado para streaming continuo desde la app Flutter.
+- **Modelo**: Utiliza **Whisper Large-v3** en GPU.
+- **Flujo**: Envío de chunks binarios -> `end_of_stream` -> Análisis completo + Sincronización RAG.
+- **Guía Detallada**: Consulta [FLUTTER_WS_GUIDE.md](file:///c:/Users/paulm/Documents/dev-projects/IAAplicada/OMIGlasses/local_models_api/FLUTTER_WS_GUIDE.md).
+
+### **B. Subida de Archivos (REST - Whisper)**
+- **Ruta**: `POST /audio/whisper`
+- **Uso**: Ideal para procesar grabaciones ya finalizadas (.wav, .mp3, .ogg).
+- **Ventaja**: Utiliza el mismo motor **Large-v3** optimizado y filtros anti-alucinaciones.
+
+### **C. Subida de Archivos (REST - SenseVoice)**
+- **Ruta**: `POST /audio/sense-voice`
+- **Uso**: Acceso al modelo **SenseVoiceSmall**.
+- **Nota**: Este modelo es extremadamente rápido para eventos acústicos (aplausos, risas), pero su precisión en español es inferior a Whisper Large-v3.
+
+---
+
 **Nota**: Esta arquitectura convierte a las OMIGlasses en un dispositivo de computación de borde (Edge Computing) extremadamente capaz, delegando solo el almacenamiento vectorial al servicio externo.
