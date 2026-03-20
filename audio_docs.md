@@ -89,6 +89,8 @@ These abstractions isolate the core business logic from any specific ASR or LLM 
   - Method `execute(session_id, language, audio_bytes)`:
     - Calls `asr_gateway.transcribe(audio_bytes, language)` to obtain transcript segments.
     - Calls `conversation_gateway.analyze(session_id, language, segments)` to obtain the full `AudioSessionAnalysis`.
+    - **Sync with RAG**: Sends the analysis to the external RAG service if `RAG_SERVICE_URL` is configured.
+    - **Local Backup**: Saves a formatted `.txt` file in the `transcriptions/` directory with the full transcript and AI interpretation.
     - Returns the resulting analysis.
 
 This use case encapsulates the orchestration logic and depends only on the domain interfaces.

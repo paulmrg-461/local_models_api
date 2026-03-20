@@ -6,8 +6,16 @@ This service exposes a local AI backend running on your own hardware (RTX 5070 1
 - Periodic image uploads over HTTP.
 - Local vision model (VLM) for scene understanding and safety awareness.
 - Local ASR + LLM pipeline to analyze full audio sessions, summarize them, and propose action items.
+- Integration with RAG (Retrieval-Augmented Generation) for long-term memory storage.
 
-The goal is to keep the client app almost unchanged: you keep sending raw audio and images, but change the URL and transport (HTTP → WebSocket for audio).
+---
+
+## What's New (Latest Updates)
+
+- **GPU Optimization (4-bit)**: Both Vision and LLM models now use 4-bit quantization (`bitsandbytes`), allowing them to run simultaneously on a single 12GB GPU (like the RTX 5070).
+- **Whisper Large-v3**: Switched to the most accurate ASR model with custom anti-hallucination filters for Spanish.
+- **Intelligent Memories**: The system now interprets conversations as "life memories" and automatically syncs them with a vectorial database (RAG Service).
+- **Long-Session Support**: Enhanced WebSocket handling for audio sessions up to several minutes long with automatic local backups in `transcriptions/`.
 
 ---
 
