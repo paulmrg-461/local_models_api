@@ -90,4 +90,29 @@ Se han habilitado tres vías principales para procesar audio, optimizadas para d
 
 ---
 
+## 7. Servicio de Visión Local (VLM)
+
+El sistema de visión ha sido optimizado para funcionar como un asistente visual experto en tiempo real:
+
+### **Características del Modelo**
+- **Modelo**: `Qwen/Qwen2.5-VL-3B-Instruct`.
+- **Optimización**: Cargado en **4-bit** (`bitsandbytes`) para minimizar el uso de VRAM sin sacrificar la comprensión de escenas.
+- **Capacidades**:
+    - Descripción detallada de personas, objetos y entorno.
+    - Identificación de riesgos o situaciones inusuales.
+    - Sugerencias contextuales para el usuario.
+
+### **Endpoints de Visión**
+1. **Subida de Imagen (Form-Data)**:
+   - **Ruta**: `POST /vision/frame`
+   - **Uso**: Envío de imágenes directamente desde la cámara.
+2. **Subida de Imagen (Base64)**:
+   - **Ruta**: `POST /vision/frame_b64`
+   - **Uso**: Envío de imágenes codificadas en JSON (útil para integraciones web/móviles específicas).
+
+### **Lógica de Re-intento (Auto-Corrección)**
+Si el modelo responde con una disculpa genérica (ej: *"Lo siento, no puedo ver eso"*), el servidor ejecuta automáticamente un **segundo pase** con un prompt más asertivo para forzar una descripción visual útil, garantizando que el usuario siempre reciba información de valor.
+
+---
+
 **Nota**: Esta arquitectura convierte a las OMIGlasses en un dispositivo de computación de borde (Edge Computing) extremadamente capaz, delegando solo el almacenamiento vectorial al servicio externo.
